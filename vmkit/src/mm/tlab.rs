@@ -18,9 +18,9 @@ impl TLAB {
         let aligned_size = raw_align_up(size, alignment);
         let result = self.cursor.align_up(alignment);
         if result + aligned_size > self.limit {
-            
             return Address::ZERO;
         } else {
+        
             self.cursor = result.add(aligned_size);
             return result;
         }

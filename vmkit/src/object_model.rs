@@ -132,6 +132,7 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
 }
 impl<VM: VirtualMachine> VMKitObjectModel<VM> {
     fn move_object(from_obj: VMKitObject, mut to: MoveTarget, num_bytes: usize) -> VMKitObject {
+        log::trace!("move_object: from_obj: {}, to: {}", from_obj.as_address(), to);
         let mut copy_bytes = num_bytes;
         let mut obj_ref_offset = OBJECT_REF_OFFSET;
         let hash_state = from_obj.header::<VM>().hash_state();

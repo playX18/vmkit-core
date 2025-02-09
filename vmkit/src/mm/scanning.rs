@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     mm::MemoryManager,
     object_model::{
-        metadata::{Metadata, Trace},
+        metadata::{Metadata, TraceCallback},
         object::VMKitObject,
     },
     options::OPTIONS,
@@ -57,11 +57,11 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         let gc_metadata = metadata.gc_metadata();
         let trace = &gc_metadata.trace;
         match trace {
-            Trace::ScanSlots(fun) => {
+            TraceCallback::ScanSlots(fun) => {
                 fun(object, slot_visitor);
             }
-            Trace::None => (),
-            Trace::TraceObject(_) => {
+            TraceCallback::None => (),
+            TraceCallback::TraceObject(_) => {
                 unreachable!("TraceObject is not supported for scanning");
             }
         }
@@ -77,7 +77,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         let gc_metadata = metadata.gc_metadata();
         let trace = &gc_metadata.trace;
         match trace {
-            Trace::ScanSlots(fun) => {
+            TraceCallback::ScanSlots(fun) => {
                 // wrap object tracer in a trait that implements SlotVisitor
                 // but actually traces the object directly.
                 let mut visitor = TraceSlotVisitor::<VM, OT> {
@@ -86,8 +86,8 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
                 };
                 fun(object, &mut visitor);
             }
-            Trace::None => (),
-            Trace::TraceObject(fun) => {
+            TraceCallback::None => (),
+            TraceCallback::TraceObject(fun) => {
                 fun(object, object_tracer);
             }
         }
@@ -123,7 +123,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
     ) -> bool {
         let object = VMKitObject::from(object);
         let metadata = object.header::<VM>().metadata();
-        matches!(metadata.gc_metadata().trace, Trace::ScanSlots(_))
+        matches!(metadata.gc_metadata().trace, TraceCallback::ScanSlots(_))
             && (!metadata.is_object() || metadata.to_slot().is_some())
     }
 

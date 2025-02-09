@@ -34,7 +34,7 @@ fn is_address_maybe_unmapped(addr: Address, size: usize) -> bool {
 }
 
 pub fn aslr_vm_layout(mmtk_options: &mut Options) -> VMLayout {
-    let mut vm_layout = VMLayout::default();
+    /*let mut vm_layout = VMLayout::default();
     let options = &*OPTIONS;
 
     if options.compressed_pointers {
@@ -89,7 +89,9 @@ pub fn aslr_vm_layout(mmtk_options: &mut Options) -> VMLayout {
         options.max_heap_size,
     ));
 
-    vm_layout
+    vm_layout*/
+
+    VMLayout::default()
 
     
 }

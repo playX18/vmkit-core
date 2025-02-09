@@ -73,11 +73,12 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
     #[inline]
     pub extern "C-unwind" fn allocate(
         thread: &Thread<VM>,
-        size: usize,
+        mut size: usize,
         alignment: usize,
         metadata: VM::Metadata,
         mut semantics: AllocationSemantics,
     ) -> VMKitObject {
+        size += size_of::<HeapObjectHeader<VM>>();
         if semantics == AllocationSemantics::Default
             && size >= thread.max_non_los_default_alloc_bytes()
         {
@@ -103,7 +104,6 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                     });
                     let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
                     Self::set_vo_bit(object);
-                    Self::refill_tlab(thread);
                     return object;
                 }
 

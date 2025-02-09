@@ -10,14 +10,14 @@ use super::object::VMKitObject;
 
 #[repr(C)]
 pub struct GCMetadata<VM: VirtualMachine> {
-    pub trace: Trace<VM>,
+    pub trace: TraceCallback<VM>,
     pub instance_size: usize,
     pub compute_size: Option<fn(VMKitObject) -> usize>,
     pub alignment: usize,
 }
 
 #[derive(Debug)]
-pub enum Trace<VM: VirtualMachine> {
+pub enum TraceCallback<VM: VirtualMachine> {
     ScanSlots(fn(VMKitObject, &mut dyn SlotVisitor<VM::Slot>)),
     TraceObject(fn(VMKitObject, &mut dyn ObjectTracer)),
     None,

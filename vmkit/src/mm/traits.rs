@@ -24,15 +24,15 @@ pub trait ToSlot<SL: Slot> {
 }
 
 pub trait Trace {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer);
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer);
 }
 
 pub trait Scan<SL: Slot> {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>);
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>);
 }
 
 impl Trace for VMKitObject {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         if self.is_null() {
             return;
         }
@@ -45,7 +45,7 @@ impl Trace for VMKitObject {
 }
 
 impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         #[cfg(feature = "cooperative")]
         {
             assert!(
@@ -72,7 +72,7 @@ impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
 }
 
 impl<SL: Slot + SlotExtra> Scan<SL> for VMKitObject {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
         if let Some(slot) = self.to_slot() {
             visitor.visit_slot(slot);
         }
@@ -167,7 +167,7 @@ macro_rules! impl_prim {
             }
 
             impl<SL: Slot> Scan<SL> for $t {
-                fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+                fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
                     let _ = visitor;
                 }
             }
@@ -179,7 +179,7 @@ macro_rules! impl_prim {
             }
 
             impl Trace for $t {
-                fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+                fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
                     let _ = tracer;
                 }
             }
@@ -210,7 +210,7 @@ impl<T: SupportsEnqueuing, U: SupportsEnqueuing> SupportsEnqueuing for Result<T,
 }
 
 impl<T: Trace> Trace for Option<T> {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         if let Some(value) = self {
             value.trace_object(tracer);
         }
@@ -218,7 +218,7 @@ impl<T: Trace> Trace for Option<T> {
 }
 
 impl<T: Trace> Trace for Vec<T> {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
             value.trace_object(tracer);
         }
@@ -226,7 +226,7 @@ impl<T: Trace> Trace for Vec<T> {
 }
 
 impl<T: Trace, const N: usize> Trace for [T; N] {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
             value.trace_object(tracer);
         }
@@ -234,13 +234,13 @@ impl<T: Trace, const N: usize> Trace for [T; N] {
 }
 
 impl<T: Trace> Trace for Box<T> {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         (**self).trace_object(tracer);
     }
 }
 
 impl<SL: Slot, T: Scan<SL>> Scan<SL> for Vec<T> {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
         for value in self {
             value.scan_object(visitor);
         }
@@ -248,7 +248,7 @@ impl<SL: Slot, T: Scan<SL>> Scan<SL> for Vec<T> {
 }
 
 impl<SL: Slot, T: Scan<SL>, const N: usize> Scan<SL> for [T; N] {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
         for value in self {
             value.scan_object(visitor);
         }
@@ -260,7 +260,7 @@ impl<T, VM: VirtualMachine> SupportsEnqueuing for FatInternalPointer<T, VM> {
 }
 
 impl<T, VM: VirtualMachine, SL: Slot + SlotExtra> Scan<SL> for FatInternalPointer<T, VM> {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
         visitor.visit_slot(self.object().to_slot().expect("never fails"));
     }
 }
@@ -272,14 +272,14 @@ impl<T, VM: VirtualMachine, SL: Slot + SlotExtra> ToSlot<SL> for FatInternalPoin
 }
 
 impl<T, VM: VirtualMachine> Trace for FatInternalPointer<T, VM> {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         self.object().trace_object(tracer);
     }
 }
 
 
 impl Trace for VMKitNarrow {
-    fn trace_object(&mut self, tracer: &mut impl ObjectTracer) {
+    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         let mut object = self.to_object();
         object.trace_object(tracer);
         *self = VMKitNarrow::encode(object);
@@ -287,7 +287,7 @@ impl Trace for VMKitNarrow {
 }
 
 impl<SL: SlotExtra> Scan<SL> for VMKitNarrow {
-    fn scan_object(&self, visitor: &mut impl SlotVisitor<SL>) {
+    fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>) {
         let slot = SL::from_narrow(self);
         visitor.visit_slot(slot);
     }

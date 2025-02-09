@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::mm::traits::SlotExtra;
 use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};
@@ -512,6 +514,15 @@ pub enum MoveTarget {
     /// Move an object to an `VMKitObject` pointing to an object previously computed from
     /// `get_reference_when_copied_to`.
     ToObject(VMKitObject),
+}
+
+impl fmt::Display for MoveTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MoveTarget::ToAddress(addr) => write!(f, "ToAddress({})", addr),
+            MoveTarget::ToObject(obj) => write!(f, "ToObject({})", obj.as_address()),
+        }
+    }
 }
 
 /// Narrow pointer to an object. This is used when pointer compression

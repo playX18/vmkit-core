@@ -12,7 +12,7 @@ pub struct Options {
     #[clap(long, default_value_t = 1024)]
     pub interior_pointer_max_bytes: usize,
 
-    #[clap(long, default_value_t = true)]
+    #[clap(long, default_value_t = false)]
     pub aslr: bool,
 
     #[clap(long, default_value_t = true)]

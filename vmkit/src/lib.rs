@@ -17,7 +17,7 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Slot: SlotExtra;
 
     const MAX_ALIGNMENT: usize = 16;
-    const MIN_ALIGNMENT: usize = 16;
+    const MIN_ALIGNMENT: usize = 8;
 
     /// Does this VM use conservative tracing? If `true` then VM can
     /// query VO-bit (valid-object bit) to check if an object is live
