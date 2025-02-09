@@ -1,0 +1,4 @@
+[workspace]
+members = ["vmkit", "vmkit-proc"]
+default-members = ["vmkit"]
+resolver = "2"

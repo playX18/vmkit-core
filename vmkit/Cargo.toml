@@ -1,0 +1,33 @@
+[package]
+name = "vmkit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+atomic = "0.6.0"
+bytemuck = "1.21.0"
+cfg-if = "1.0.0"
+clap = { version = "4.5.28", features = ["derive"] }
+easy-bitfield = "0.1.0"
+errno = "0.3.10"
+libc = "0.2.169"
+mmtk = { git = "https://github.com/mmtk/mmtk-core" }
+parking_lot = "0.12.3"
+rand = "0.9.0"
+
+
+
+
+[features]
+default = ["cooperative"]
+# VMKit is built for use in cooperative runtime. Such runtime
+# would be able to use write barriers and safepoints. Such environment
+# must also provide precise object layout (stack can be uncooperative).
+cooperative = ["mmtk/vo_bit", "mmtk/is_mmtk_object", "mmtk/vo_bit_access"]
+# VMKit is built for use in full-precise runtime. Such runtime
+# would be able to use precise write barriers and safepoints, object
+# layout is fully precise.
+full-precise = []
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["everything"] }
