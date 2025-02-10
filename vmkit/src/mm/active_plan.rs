@@ -10,7 +10,7 @@ pub struct VMKitActivePlan<VM: VirtualMachine>(PhantomData<VM>);
 impl<VM: VirtualMachine> ActivePlan<MemoryManager<VM>> for VMKitActivePlan<VM> {
     
     fn is_mutator(tls: mmtk::util::VMThread) -> bool {
-        let x = Thread::<VM>::from_vm_thread(tls);
+    
         Thread::<VM>::from_vm_thread(tls).active_mutator_context()
     }
 

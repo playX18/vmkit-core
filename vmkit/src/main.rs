@@ -1,32 +1,32 @@
-
+use mmtk::util::options::AffinityKind;
+use mmtk::util::Address;
 use mmtk::{util::options::PlanSelector, vm::slot::SimpleSlot, AllocationSemantics, MMTKBuilder};
-use std::mem::offset_of;
+use std::cell::RefCell;
 use std::sync::OnceLock;
+use std::sync::Arc;
+use vmkit::threading::parked_scope;
 use vmkit::{
     mm::{traits::Trace, MemoryManager},
     object_model::{
         metadata::{GCMetadata, TraceCallback},
         object::VMKitObject,
     },
+    sync::Monitor,
     threading::{GCBlockAdapter, Thread, ThreadContext},
     VMKit, VirtualMachine,
 };
 
-const CONSERVATIVE_TRACE_NODE: bool = false;
-
 #[repr(C)]
 struct Node {
-    left: VMKitObject,
-    right: VMKitObject,
-    i: usize,
-    j: usize,
+    left: NodeRef,
+    right: NodeRef,
 }
 
 static METADATA: GCMetadata<BenchVM> = GCMetadata {
     trace: TraceCallback::TraceObject(|object, tracer| unsafe {
         let node = object.as_address().as_mut_ref::<Node>();
-        node.left.trace_object(tracer);
-        node.right.trace_object(tracer);
+        node.left.0.trace_object(tracer);
+        node.right.0.trace_object(tracer);
     }),
     instance_size: size_of::<Node>(),
     compute_size: None,
@@ -104,136 +104,155 @@ impl VirtualMachine for BenchVM {
     }
 }
 
-fn make_node(
-    thread: &Thread<BenchVM>,
-    left: VMKitObject,
-    right: VMKitObject,
-    i: usize,
-    j: usize,
-) -> VMKitObject {
-    let node = MemoryManager::allocate(
-        thread,
-        size_of::<Node>(),
-        16,
-        &METADATA,
-        AllocationSemantics::Default,
-    );
-   
-    unsafe {
-        node.set_field_object_no_write_barrier::<BenchVM, false>(offset_of!(Node, left), left);
-        node.set_field_object_no_write_barrier::<BenchVM, false>(offset_of!(Node, right), right);
-        node.set_field_usize::<BenchVM>(offset_of!(Node, i), i);
-        node.set_field_usize::<BenchVM>(offset_of!(Node, j), j);
-    }
-    node
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct NodeRef(VMKitObject);
 
-fn tree_size(i: usize) -> usize {
-    (1 << (i + 1)) - 1
-}
-
-fn num_iters(stretch_tree_depth: usize, i: usize) -> usize {
-    4 + tree_size(stretch_tree_depth) / tree_size(i)
-}
-
-fn populate(thread: &Thread<BenchVM>, depth: usize, this_node: VMKitObject) {
-    let mut depth = depth;
-    if depth <= 0 {
-        return;
+impl NodeRef {
+    pub fn new(thread: &Thread<BenchVM>, left: NodeRef, right: NodeRef) -> Self {
+        let node = MemoryManager::<BenchVM>::allocate(
+            thread,
+            size_of::<Node>(),
+            16,
+            &METADATA,
+            AllocationSemantics::Default,
+        );
+        unsafe {
+            let node = node.as_address().as_mut_ref::<Node>();
+            node.left = left;
+            node.right = right;
+        }
+        Self(node)
     }
 
-    depth -= 1;
-    this_node.set_field_object::<BenchVM, false>(
-        offset_of!(Node, left),
-        make_node(thread, VMKitObject::NULL, VMKitObject::NULL, 0, 0),
-    );
-    let left = this_node.get_field_object::<BenchVM, false>(offset_of!(Node, left));
-    this_node.set_field_object::<BenchVM, false>(
-        offset_of!(Node, right),
-        make_node(thread, VMKitObject::NULL, VMKitObject::NULL, 0, 0),
-    );
-
-    
-
-    populate(
-        thread,
-        depth,
-        this_node.get_field_object::<BenchVM, false>(offset_of!(Node, left)),
-    );
-    populate(
-        thread,
-        depth,
-        this_node.get_field_object::<BenchVM, false>(offset_of!(Node, right)),
-    );
-}
-
-fn make_tree(thread: &Thread<BenchVM>, depth: usize) -> VMKitObject {
-    if depth <= 0 {
-        return make_node(thread, VMKitObject::NULL, VMKitObject::NULL, 0, 0);
+    pub fn left(&self) -> NodeRef {
+        unsafe {
+            let node = self.0.as_address().as_ref::<Node>();
+            node.left
+        }
     }
 
-    let left = make_tree(thread, depth - 1);
-    let right = make_tree(thread, depth - 1);
-    make_node(thread, left, right, 0, 0)
-}
-
-fn time_construction(thread: &Thread<BenchVM>, stretch_tree_depth: usize, depth: usize) {
-    let i_num_iters = num_iters(stretch_tree_depth, depth);
-    println!("creating {} trees of depth {}", i_num_iters, depth);
-    let start = std::time::Instant::now();
-    
-    let mut i = 0;
-    while i < i_num_iters {
-        let temp_tree = make_node(thread, VMKitObject::NULL, VMKitObject::NULL, 0, 0);
-        populate(thread, depth, temp_tree);
-        i += 1;
+    pub fn right(&self) -> NodeRef {
+        unsafe {
+            let node = self.0.as_address().as_ref::<Node>();
+            node.right
+        }
     }
 
-    let finish = std::time::Instant::now();
-    println!("\tTop down construction took: {:04}ms", finish.duration_since(start).as_micros() as f64 / 1000.0);
-    
+    pub fn null() -> Self {
+        Self(VMKitObject::NULL)
+    }
 
-    let duration = start.elapsed();
-    println!("time_construction: {:?}", duration);
+    pub fn item_check(&self) -> usize {
+        if self.left() == NodeRef::null() {
+            1
+        } else {
+            1 + self.left().item_check() + self.right().item_check()
+        }
+    }
+
+    pub fn leaf(thread: &Thread<BenchVM>) -> Self {
+        Self::new(thread, NodeRef::null(), NodeRef::null())
+    }
 }
+
+fn bottom_up_tree(thread: &Thread<BenchVM>, depth: usize) -> NodeRef {
+    if thread.take_yieldpoint() != 0 {
+        Thread::<BenchVM>::yieldpoint(0, Address::ZERO);
+    }
+    if depth > 0 {
+        NodeRef::new(
+            thread,
+            bottom_up_tree(thread, depth - 1),
+            bottom_up_tree(thread, depth - 1),
+        )
+    } else {
+        NodeRef::leaf(thread)
+    }
+}
+
+const MIN_DEPTH: usize = 4;
 
 fn main() {
     env_logger::init();
-    let mut options = MMTKBuilder::new();
-    options.options.plan.set(PlanSelector::StickyImmix);
-    options.options.gc_trigger.set(mmtk::util::options::GCTriggerSelector::DynamicHeapSize(64*1024*1024, 8*1024*1024*1024));
-    let vm = BenchVM {
-        vmkit: VMKit::new(options)
-    };
-
-    VM.set(vm).unwrap_or_else(|_| panic!("Failed to set VM"));
+    let nthreads = std::env::var("THREADS")
+        .unwrap_or("4".to_string())
+        .parse::<usize>()
+        .unwrap();
+    let mut builder = MMTKBuilder::new();
+    builder.options.plan.set(PlanSelector::Immix);
+    builder.options.threads.set(nthreads);
+    builder.options.thread_affinity.set(AffinityKind::RoundRobin(vec![0, 1, 2, 3, 4, 5, 6, 7, 8]));
+    builder.options.gc_trigger.set(mmtk::util::options::GCTriggerSelector::DynamicHeapSize(1*1024*1024*1024, 3*1024*1024*1024));
+    VM.set(BenchVM {
+        vmkit: VMKit::new(builder),
+    })
+    .unwrap_or_else(|_| panic!());
 
     Thread::<BenchVM>::main(ThreadBenchContext, || {
-        let tls= Thread::<BenchVM>::current();
-        
-        let depth = std::env::var("DEPTH").unwrap_or("18".to_string()).parse::<usize>().unwrap();
-        let long_lived_tree_depth = depth;
-        
-        let stretch_tree_depth = depth + 1;
-        
-        println!("stretching memory with tree of depth: {}", stretch_tree_depth);
+        let thread = Thread::<BenchVM>::current();
         let start = std::time::Instant::now();
-        make_tree(tls, stretch_tree_depth as _);
+        let n = std::env::var("DEPTH")
+            .unwrap_or("18".to_string())
+            .parse::<usize>()
+            .unwrap();
+        let max_depth = if n < MIN_DEPTH + 2 { MIN_DEPTH + 2 } else { n };
 
-        println!("creating long-lived tree of depth: {}", long_lived_tree_depth);
-        let long_lived_tree = make_node(tls, VMKitObject::NULL, VMKitObject::NULL, 0, 0);
-        populate(tls, long_lived_tree_depth as _, long_lived_tree);
+        let stretch_depth = max_depth + 1;
 
+        println!("stretch tree of depth {stretch_depth}");
+        
+        let _ = bottom_up_tree(&thread, stretch_depth);
+        let duration = start.elapsed();
+        println!("time: {duration:?}");
 
-        let mut d = 4;
+        let results = Arc::new(Monitor::new(vec![
+            RefCell::new(String::new());
+            (max_depth - MIN_DEPTH) / 2 + 1
+        ]));
 
-        while d <= depth {
-            time_construction(tls, stretch_tree_depth, d);
-            d += 2;
+        let mut handles = Vec::new();
+
+        for d in (MIN_DEPTH..=max_depth).step_by(2) {
+            let depth = d;
+
+            let thread = Thread::<BenchVM>::for_mutator(ThreadBenchContext);
+            let results = results.clone();
+            let handle = thread.start(move || {
+                let thread = Thread::<BenchVM>::current();
+                let mut check = 0;
+
+                let iterations = 1 << (max_depth - depth + MIN_DEPTH);
+                for _ in 1..=iterations {
+                    if thread.take_yieldpoint() != 0 {
+                        Thread::<BenchVM>::yieldpoint(0, Address::ZERO);
+                    }
+                    let tree_node = bottom_up_tree(&thread, depth);
+                    check += tree_node.item_check();
+                }
+
+                *results.lock_with_handshake::<BenchVM>()[(depth - MIN_DEPTH) / 2].borrow_mut() =
+                    format!("{iterations}\t trees of depth {depth}\t check: {check}");
+            });
+            handles.push(handle);
         }
 
-        let finish = std::time::Instant::now();
-        println!("total execution time: {:04}ms", finish.duration_since(start).as_micros() as f64 / 1000.0);
-        
+        parked_scope::<(), BenchVM>(|| {
+            while let Some(handle) = handles.pop() {
+                handle.join().unwrap();
+            }
+        });
+
+        for result in results.lock_with_handshake::<BenchVM>().iter() {
+            println!("{}", result.borrow());
+        }
+
+        println!(
+            "long lived tree of depth {max_depth}\t check: {}",
+            bottom_up_tree(&thread, max_depth).item_check()
+        );
+
+        let duration = start.elapsed();
+        println!("time: {duration:?}");
     });
 }

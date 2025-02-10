@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! Address space layout randomization for MMTk.
 
 use mmtk::util::{

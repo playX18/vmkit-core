@@ -11,14 +11,15 @@ use std::{
 
 use atomic::Atomic;
 use mmtk::{
-    util::{Address, VMMutatorThread, VMThread},
+    util::{alloc::AllocatorSelector, Address, VMMutatorThread, VMThread},
     vm::RootsWorkFactory,
-    BarrierSelector, Mutator,
+    AllocationSemantics, BarrierSelector, Mutator,
 };
 
 use crate::{
     mm::{
-        conservative_roots::ConservativeRoots, stack_bounds::StackBounds, tlab::TLAB, MemoryManager,
+        conservative_roots::ConservativeRoots, stack_bounds::StackBounds, tlab::TLAB,
+        AllocFastPath, MemoryManager,
     },
     object_model::compression::CompressedOps,
     sync::{Monitor, MonitorGuard},
@@ -156,6 +157,7 @@ pub struct Thread<VM: VirtualMachine> {
     pub tlab: UnsafeCell<TLAB>,
     max_non_los_default_alloc_bytes: Cell<usize>,
     barrier: Cell<BarrierSelector>,
+    alloc_fastpath: Cell<AllocFastPath>,
     mmtk_mutator: UnsafeCell<MaybeUninit<Mutator<MemoryManager<VM>>>>,
     has_collector_context: AtomicBool,
     exec_status: Atomic<ThreadState>,
@@ -223,6 +225,7 @@ impl<VM: VirtualMachine> Thread<VM> {
             tlab: UnsafeCell::new(TLAB::new()),
             stack_bounds: OnceCell::new(),
             barrier: Cell::new(BarrierSelector::NoBarrier),
+            alloc_fastpath: Cell::new(AllocFastPath::None),
             max_non_los_default_alloc_bytes: Cell::new(0),
             take_yieldpoint: AtomicI32::new(0),
             context: ctx.unwrap_or_else(|| VM::ThreadContext::new(collector_context)),
@@ -305,6 +308,10 @@ impl<VM: VirtualMachine> Thread<VM> {
         self.barrier.get()
     }
 
+    pub fn alloc_fastpath(&self) -> AllocFastPath {
+        self.alloc_fastpath.get()
+    }
+
     pub fn max_non_los_default_alloc_bytes(&self) -> usize {
         self.max_non_los_default_alloc_bytes.get()
     }
@@ -321,6 +328,23 @@ impl<VM: VirtualMachine> Thread<VM> {
         self.max_non_los_default_alloc_bytes
             .set(constraints.max_non_los_default_alloc_bytes);
         self.barrier.set(constraints.barrier);
+
+        let selector = mmtk::memory_manager::get_allocator_mapping(
+            &VM::get().vmkit().mmtk,
+            AllocationSemantics::Default,
+        );
+        match selector {
+            AllocatorSelector::BumpPointer(_) | AllocatorSelector::Immix(_) => {
+                self.alloc_fastpath.set(AllocFastPath::TLAB);
+            }
+
+            AllocatorSelector::FreeList(_) => {
+                self.alloc_fastpath.set(AllocFastPath::FreeList);
+            }
+
+            _ => self.alloc_fastpath.set(AllocFastPath::None),
+        }
+
         self.stack_bounds
             .set(StackBounds::current_thread_stack_bounds())
             .unwrap();
@@ -542,6 +566,10 @@ impl<VM: VirtualMachine> Thread<VM> {
         let mut lock = self.monitor().lock_no_handshake();
         self.is_blocking.store(true, Ordering::Relaxed);
 
+        log::trace!("Thread #{} in check_block_no_save_context", self.thread_id);
+
+        let mut had_really_blocked = false;
+
         loop {
             // deal with block requests
             self.acknowledge_block_requests();
@@ -549,11 +577,26 @@ impl<VM: VirtualMachine> Thread<VM> {
             if !self.is_blocked() {
                 break;
             }
+
+            had_really_blocked = true;
+            log::trace!(
+                "Thread #{} is really blocked with status {:?}",
+                self.thread_id,
+                self.get_exec_status()
+            );
             // what if a GC request comes while we're here for a suspend()
             // request?
             // answer: we get awoken, reloop, and acknowledge the GC block
             // request.
             lock.wait_no_handshake();
+            log::trace!(
+                "Thread #{} has awoken; checking if we're still blocked",
+                self.thread_id
+            );
+        }
+
+        if had_really_blocked {
+            log::trace!("Thread #{} is unblocking", self.thread_id);
         }
 
         // SAFETY: We are holding the monitor lock.
@@ -689,22 +732,43 @@ impl<VM: VirtualMachine> Thread<VM> {
 
         let mut lock = self.monitor.lock_no_handshake();
         let token = A::request_block(self);
-
+        log::trace!(
+            "Thread #{} is requesting that thread #{} blocks",
+            current_thread::<VM>().thread_id,
+            self.thread_id
+        );
         if current_thread::<VM>().thread_id == self.thread_id {
+            log::trace!("Thread #{} is blocking itself", self.thread_id);
             self.check_block();
             result = self.get_exec_status();
         } else {
             if self.is_about_to_terminate() {
+                log::trace!(
+                    "Thread #{} is about to terminate, returning as if blocked in TERMINATED state",
+                    self.thread_id
+                );
                 result = ThreadState::Terminated;
             } else {
                 self.take_yieldpoint.store(1, Ordering::Relaxed);
                 let new_state = self.set_blocked_exec_status();
                 result = new_state;
 
+                log::trace!(
+                    "Thread #{} is blocking thread #{} which is in state {:?}",
+                    current_thread::<VM>().thread_id,
+                    self.thread_id,
+                    new_state
+                );
                 self.monitor.notify_all();
 
                 if new_state == ThreadState::InManagedToBlock {
                     if !asynchronous {
+                        log::trace!(
+                            "Thread #{} is waiting for thread #{} to block",
+                            current_thread::<VM>().thread_id,
+                            self.thread_id
+                        );
+                        
                         while A::has_block_request_with_token(self, token)
                             && !A::is_blocked(self)
                             && !self.is_about_to_terminate()
@@ -874,7 +938,7 @@ impl<VM: VirtualMachine> Thread<VM> {
 
     pub fn mutator(&self) -> &'static mut Mutator<MemoryManager<VM>> {
         unsafe {
-            assert!(Thread::<VM>::current().thread_id == self.thread_id);
+            debug_assert!(Thread::<VM>::current().thread_id == self.thread_id);
             self.mutator_unchecked()
         }
     }
@@ -1042,6 +1106,8 @@ impl<VM: VirtualMachine> Thread<VM> {
     /// - `fp`: The frame pointer of the service method that called this method
     ///
     /// Exposed as `extern "C-unwind"` to allow directly invoking it from JIT/AOT code.
+    #[inline(never)]
+    #[cold]
     pub extern "C-unwind" fn yieldpoint(where_from: i32, fp: Address) {
         let thread = Thread::<VM>::current();
         let _was_at_yieldpoint = thread.at_yieldpoint.load(atomic::Ordering::Relaxed);
@@ -1094,7 +1160,7 @@ thread_local! {
 pub fn current_thread<VM: VirtualMachine>() -> &'static Thread<VM> {
     let addr = CURRENT_THREAD.with(|t| *t.borrow());
 
-    assert!(!addr.is_zero());
+    debug_assert!(!addr.is_zero());
     unsafe { addr.as_ref() }
 }
 
@@ -1240,6 +1306,7 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
     /// Fixpoint until there are no threads that we haven't blocked. Fixpoint is needed to
     /// catch the (unlikely) case that a thread spawns another thread while we are waiting.
     pub fn block_all_mutators_for_gc(&self) -> Vec<Arc<Thread<VM>>> {
+
         let mut handshake_threads = Vec::with_capacity(4);
         loop {
             let lock = self.inner.lock_no_handshake();

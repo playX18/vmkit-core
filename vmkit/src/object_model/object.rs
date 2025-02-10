@@ -137,15 +137,21 @@ impl VMKitObject {
     pub fn bytes_used<VM: VirtualMachine>(self) -> usize {
         let metadata = self.header::<VM>().metadata().gc_metadata();
         let overhead = self.hashcode_overhead::<VM, false>();
-        
+
         if metadata.instance_size != 0 {
-            raw_align_up(metadata.instance_size + size_of::<HeapObjectHeader<VM>>(), align_of::<usize>()) + overhead
+            raw_align_up(
+                metadata.instance_size + size_of::<HeapObjectHeader<VM>>(),
+                align_of::<usize>(),
+            ) + overhead
         } else {
             let Some(compute_size) = metadata.compute_size else {
                 panic!("compute_size is not set for object at {}", self.0);
             };
 
-            raw_align_up(compute_size(self) + size_of::<HeapObjectHeader<VM>>(), align_of::<usize>()) + overhead
+            raw_align_up(
+                compute_size(self) + size_of::<HeapObjectHeader<VM>>(),
+                align_of::<usize>(),
+            ) + overhead
         }
     }
 
@@ -198,7 +204,7 @@ impl VMKitObject {
         let res = self
             .0
             .offset(-(OBJECT_REF_OFFSET as isize + self.hashcode_overhead::<VM, false>() as isize));
-        
+
         res
     }
 
@@ -258,7 +264,7 @@ impl VMKitObject {
                 "attempt to access field out of bounds"
             );
             let ordering = if !VOLATILE {
-                atomic::Ordering::Relaxed
+                return self.as_address().add(offset).load::<T>();
             } else {
                 atomic::Ordering::SeqCst
             };
@@ -282,7 +288,8 @@ impl VMKitObject {
         );
         unsafe {
             let ordering = if !VOLATILE {
-                atomic::Ordering::Relaxed
+                self.as_address().add(offset).store(value);
+                return;
             } else {
                 atomic::Ordering::SeqCst
             };

@@ -117,6 +117,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         VM::scan_vm_specific_roots(tls, factory);
     }
 
+    #[inline(always)]
     fn support_slot_enqueuing(
         _tls: mmtk::util::VMWorkerThread,
         object: mmtk::util::ObjectReference,

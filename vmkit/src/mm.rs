@@ -10,7 +10,7 @@ use crate::{
 use easy_bitfield::{AtomicBitfieldContainer, ToBitfield};
 use mmtk::{
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
+        alloc::{AllocatorSelector, BumpAllocator, FreeListAllocator, ImmixAllocator},
         metadata::side_metadata::GLOBAL_SIDE_METADATA_BASE_ADDRESS,
         VMMutatorThread,
     },
@@ -65,6 +65,49 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         )
     }
 
+    /// General purpose allocation function. Always goes to `mmtk::memory_manager::alloc`
+    /// and does not attempt to perform fast-path allocation. This is useful for debugging
+    /// or when your JIT/AOT compiler is not yet able to produce fast-path allocation.
+    #[inline(never)]
+    pub extern "C-unwind" fn allocate_out_of_line(
+        thread: &Thread<VM>,
+        mut size: usize,
+        alignment: usize,
+        metadata: VM::Metadata,
+        mut semantics: AllocationSemantics,
+    ) -> VMKitObject {
+        size += size_of::<HeapObjectHeader<VM>>();
+        if semantics == AllocationSemantics::Default
+            && size >= thread.max_non_los_default_alloc_bytes()
+        {
+            semantics = AllocationSemantics::Los;
+        }
+
+        match semantics {
+            AllocationSemantics::Los => Self::allocate_los(thread, size, alignment, metadata),
+            AllocationSemantics::NonMoving => {
+                Self::allocate_nonmoving(thread, size, alignment, metadata)
+            }
+            AllocationSemantics::Immortal => {
+                Self::allocate_immortal(thread, size, alignment, metadata)
+            }
+            _ => unsafe {
+                Self::flush_tlab(thread);
+                let object_start =
+                    mmtk::memory_manager::alloc(thread.mutator(), size, alignment, 0, semantics);
+
+                object_start.store(HeapObjectHeader::<VM> {
+                    metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
+                    marker: PhantomData,
+                });
+                let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
+                Self::set_vo_bit(object);
+                Self::refill_tlab(thread);
+                object
+            },
+        }
+    }
+
     /// Allocate object with `size`, `alignment`, and `metadata` with specified `semantics`.
     ///
     /// This function is a fast-path for allocation. If you allocate with `Default` semantics,
@@ -78,41 +121,46 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         metadata: VM::Metadata,
         mut semantics: AllocationSemantics,
     ) -> VMKitObject {
+        let orig_size = size;
+        let orig_semantics = semantics;
         size += size_of::<HeapObjectHeader<VM>>();
         if semantics == AllocationSemantics::Default
             && size >= thread.max_non_los_default_alloc_bytes()
         {
             semantics = AllocationSemantics::Los;
         }
+
         // all allocator functions other than this actually invoke `flush_tlab` due to the fact
         // that GC can happen inside them.
         match semantics {
-            AllocationSemantics::Los => Self::allocate_los(thread, size, alignment, metadata),
-            AllocationSemantics::NonMoving => {
-                Self::allocate_nonmoving(thread, size, alignment, metadata)
-            }
-            AllocationSemantics::Immortal => {
-                Self::allocate_immortal(thread, size, alignment, metadata)
-            }
-            _ => unsafe {
-                let tlab = thread.tlab.get().as_mut().unwrap();
-                let object_start = tlab.allocate(size, alignment);
-                if !object_start.is_zero() {
-                    object_start.store(HeapObjectHeader::<VM> {
-                        metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                        marker: PhantomData,
-                    });
-                    let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
-                    Self::set_vo_bit(object);
-                    return object;
-                }
+            AllocationSemantics::Default => match thread.alloc_fastpath() {
+                AllocFastPath::TLAB => unsafe {
+                    let tlab = thread.tlab.get().as_mut().unwrap();
+                    let object_start = tlab.allocate(size, alignment);
+                    if !object_start.is_zero() {
+                        object_start.store(HeapObjectHeader::<VM> {
+                            metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
+                            marker: PhantomData,
+                        });
+                        let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
+                        Self::set_vo_bit(object);
+                        return object;
+                    }
 
-                Self::allocate_slow(thread, size, alignment, metadata, semantics)
+                    return Self::allocate_slow(thread, size, alignment, metadata, semantics)
+                },
+
+                _ => ()
             },
+
+            _ => ()
         }
+
+        Self::allocate_out_of_line(thread, orig_size, alignment, metadata, orig_semantics)
     }
 
-    pub extern "C-unwind" fn allocate_los(
+    #[inline(never)]
+    extern "C-unwind" fn allocate_los(
         thread: &Thread<VM>,
         size: usize,
         alignment: usize,
@@ -142,7 +190,8 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         }
     }
 
-    pub extern "C-unwind" fn allocate_nonmoving(
+    #[inline(never)]
+    extern "C-unwind" fn allocate_nonmoving(
         thread: &Thread<VM>,
         size: usize,
         alignment: usize,
@@ -171,7 +220,8 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         }
     }
 
-    pub extern "C-unwind" fn allocate_immortal(
+    #[inline(never)]
+    extern "C-unwind" fn allocate_immortal(
         thread: &Thread<VM>,
         size: usize,
         alignment: usize,
@@ -227,7 +277,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub extern "C-unwind" fn set_vo_bit(object: VMKitObject) {
         #[cfg(feature = "cooperative")]
         unsafe {
@@ -399,4 +449,11 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         }
         Self::object_reference_write_post(thread, src, slot, target);
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AllocFastPath {
+    TLAB,
+    FreeList,
+    None,
 }
