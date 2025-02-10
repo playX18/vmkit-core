@@ -3,5 +3,5 @@ members = ["vmkit", "vmkit-proc"]
 default-members = ["vmkit"]
 resolver = "2"
 
-[workspace.example]
-members = ["examples/*"]
+[profile.release]
+lto="fat"
