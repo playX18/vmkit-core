@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     hash::Hash,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -13,7 +14,7 @@ use mmtk::{
 use crate::{object_model::object::VMKitObject, options::OPTIONS, VirtualMachine};
 
 pub struct ConservativeRoots {
-    pub roots: Vec<ObjectReference>,
+    pub roots: HashSet<ObjectReference>,
     pub internal_pointer_limit: usize,
 }
 
@@ -29,6 +30,13 @@ impl ConservativeRoots {
             return;
         }
 
+        if self
+            .roots
+            .contains(unsafe { &ObjectReference::from_raw_address_unchecked(pointer) })
+        {
+            return;
+        }
+
         let Some(start) = mmtk::memory_manager::find_object_from_internal_pointer(
             pointer,
             self.internal_pointer_limit,
@@ -36,7 +44,7 @@ impl ConservativeRoots {
             return;
         };
 
-        self.roots.push(start);
+        self.roots.insert(start);
     }
 
     /// Add all pointers in the span to the roots.
@@ -58,17 +66,19 @@ impl ConservativeRoots {
 
     pub fn new() -> Self {
         Self {
-            roots: Vec::new(),
+            roots: HashSet::new(),
             internal_pointer_limit: OPTIONS.interior_pointer_max_bytes,
         }
     }
 
     pub fn add_to_factory<SL: Slot>(&mut self, factory: &mut impl RootsWorkFactory<SL>) {
-        factory.create_process_pinning_roots_work(std::mem::take(&mut self.roots));
+        factory.create_process_tpinning_roots_work(std::mem::take(
+            &mut self.roots.clone().into_iter().collect(),
+        ));
     }
 }
 
-/// Pointer to some part of an heap object. 
+/// Pointer to some part of an heap object.
 /// This type can only be used when `cooperative` feature is enabled and [`VM::CONSERVATIVE_TRACING`](VirtualMachine::CONSERVATIVE_TRACING) is `true`.
 pub struct InternalPointer<T, VM: VirtualMachine> {
     address: Address,
@@ -91,7 +101,10 @@ impl<T, VM: VirtualMachine> InternalPointer<T, VM> {
             .is_some(),
             "Internal pointer is not in the heap"
         );
-        assert!(VM::CONSERVATIVE_TRACING, "Internal pointers are not supported without VM::CONSERVATIVE_TRACING set to true");
+        assert!(
+            VM::CONSERVATIVE_TRACING,
+            "Internal pointers are not supported without VM::CONSERVATIVE_TRACING set to true"
+        );
         Self {
             address,
             _marker: std::marker::PhantomData,
@@ -108,7 +121,12 @@ impl<T, VM: VirtualMachine> InternalPointer<T, VM> {
     ///
     /// Panics if the pointer is not in the heap.
     pub fn object(&self) -> VMKitObject {
-        mmtk::memory_manager::find_object_from_internal_pointer(self.address, OPTIONS.interior_pointer_max_bytes).unwrap().into()
+        mmtk::memory_manager::find_object_from_internal_pointer(
+            self.address,
+            OPTIONS.interior_pointer_max_bytes,
+        )
+        .unwrap()
+        .into()
     }
 
     /// Return offset from the object start.
