@@ -58,7 +58,7 @@ pub struct Monitor<T> {
 }
 
 impl<T> Monitor<T> {
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self {
             mutex: Mutex::new(value),
             cvar: Condvar::new(),
@@ -84,6 +84,43 @@ impl<T> Monitor<T> {
         };
         self.rec_count.fetch_add(1, Ordering::Relaxed);
         guard
+    }
+
+    pub fn lock_with_handshake<VM: VirtualMachine>(&self) -> MonitorGuard<T> {
+        let my_slot = get_thread_id().get();
+        let guard = if my_slot != self.holder.load(Ordering::Relaxed) {
+            let guard = self.lock_with_handshake_no_rec::<VM>();
+            self.holder.store(my_slot, Ordering::Release);
+            guard
+        } else {
+            MonitorGuard {
+                monitor: self,
+                guard: unsafe { ManuallyDrop::new(self.mutex.make_guard_unchecked()) },
+            }
+        };
+        self.rec_count.fetch_add(1, Ordering::Relaxed);
+        guard
+    }
+
+    fn lock_with_handshake_no_rec<VM: VirtualMachine>(&self) -> MonitorGuard<'_, T> {
+        let tls = Thread::<VM>::current();
+        tls.context.save_thread_state();
+
+        let mutex_guard = loop {
+            Thread::<VM>::enter_native();
+            let guard = self.mutex.lock();
+            if Thread::<VM>::attempt_leave_native_no_block() {
+                break guard;
+            } else {
+                drop(guard);
+                Thread::<VM>::leave_native();
+            }
+        };
+
+        MonitorGuard {
+            monitor: self,
+            guard: ManuallyDrop::new(mutex_guard),
+        }
     }
 
     pub fn notify(&self) {
