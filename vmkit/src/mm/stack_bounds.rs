@@ -159,7 +159,7 @@ impl StackBounds {
     fn current_thread_stack_bounds_internal() -> Self {
         let ret = unsafe { Self::new_thread_stack_bounds(libc::pthread_self()) };
 
-        /*#[cfg(target_os = "linux")]
+        #[cfg(target_os = "linux")]
         unsafe {
             // on glibc, pthread_attr_getstack will generally return the limit size (minus a guard page)
             // for the main thread; this is however not necessarily always true on every libc - for example
@@ -182,7 +182,7 @@ impl StackBounds {
 
                 return Self { origin, bound };
             }
-        }*/
+        }
 
         ret
     }

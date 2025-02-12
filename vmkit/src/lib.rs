@@ -1,14 +1,19 @@
 use std::{marker::PhantomData, sync::atomic::AtomicBool};
 
 use mm::{aslr::aslr_vm_layout, traits::SlotExtra, MemoryManager};
-use mmtk::{ MMTKBuilder, MMTK};
-use threading::ThreadManager;
+use mmtk::{MMTKBuilder, MMTK};
+use threading::{initialize_threading, ThreadManager};
 
+pub mod machine_context;
 pub mod mm;
 pub mod object_model;
 pub mod options;
+pub mod semaphore;
 pub mod sync;
 pub mod threading;
+
+#[cfg(feature="uncooperative")]
+pub mod bdwgc_shim;
 
 pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type ThreadContext: threading::ThreadContext<Self>;
@@ -113,7 +118,8 @@ pub struct VMKit<VM: VirtualMachine> {
 }
 
 impl<VM: VirtualMachine> VMKit<VM> {
-    pub fn new(mut builder: MMTKBuilder) -> Self {
+    pub fn new(builder: &mut MMTKBuilder) -> Self {
+        initialize_threading::<VM>();
         let vm_layout = aslr_vm_layout(&mut builder.options);
         builder.set_vm_layout(vm_layout);
         VMKit {

@@ -104,7 +104,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         if OPTIONS.conservative_stacks {
             let mut croots = ConservativeRoots::new();
             let bounds = *tls.stack_bounds();
-            unsafe { croots.add_span(bounds.origin(), bounds.end()) };
+            unsafe { croots.add_span(bounds.origin(), tls.stack_pointer()) };
             tls.context.scan_conservative_roots(&mut croots);
             croots.add_to_factory(&mut factory);
         }

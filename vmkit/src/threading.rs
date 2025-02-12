@@ -3,8 +3,8 @@ use std::{
     mem::{offset_of, MaybeUninit},
     panic::AssertUnwindSafe,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU64, AtomicUsize, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        Arc, LazyLock,
     },
     thread::JoinHandle,
 };
@@ -15,13 +15,17 @@ use mmtk::{
     vm::RootsWorkFactory,
     AllocationSemantics, BarrierSelector, Mutator,
 };
+use parking_lot::Once;
 
 use crate::{
     mm::{
-        conservative_roots::ConservativeRoots, stack_bounds::StackBounds, tlab::TLAB,
+        conservative_roots::ConservativeRoots,
+        stack_bounds::{current_stack_pointer, StackBounds},
+        tlab::TLAB,
         AllocFastPath, MemoryManager,
     },
     object_model::compression::CompressedOps,
+    semaphore::Semaphore,
     sync::{Monitor, MonitorGuard},
     VirtualMachine,
 };
@@ -87,6 +91,11 @@ impl ThreadState {
 }
 
 unsafe impl bytemuck::NoUninit for ThreadState {}
+
+#[cfg(unix)]
+pub type PlatformThreadHandle = libc::pthread_t;
+#[cfg(windows)]
+pub type PlatformThreadHandle = winapi::um::winnt::HANDLE;
 
 pub trait ThreadContext<VM: VirtualMachine> {
     fn save_thread_state(&self);
@@ -174,6 +183,7 @@ pub struct Thread<VM: VirtualMachine> {
     /// associated with the Thread.
     is_joinable: AtomicBool,
     thread_id: u64,
+    tid: AtomicU64,
     index_in_manager: AtomicUsize,
 
     yieldpoints_enabled_count: AtomicI8,
@@ -184,10 +194,14 @@ pub struct Thread<VM: VirtualMachine> {
 
     is_blocked_for_gc: AtomicBool,
     should_block_for_gc: AtomicBool,
+
+    stack_pointer: Atomic<usize>,
+    suspend_count: AtomicUsize,
     /// The monitor of the thread. Protects access to the thread's state.
     monitor: Monitor<()>,
     communication_lock: Monitor<()>,
     stack_bounds: OnceCell<StackBounds>,
+    platform_handle: Cell<PlatformThreadHandle>,
 }
 
 unsafe impl<VM: VirtualMachine> Send for Thread<VM> {}
@@ -222,12 +236,16 @@ impl<VM: VirtualMachine> Thread<VM> {
         }
 
         Arc::new(Self {
+            suspend_count: AtomicUsize::new(0),
+            stack_pointer: Atomic::new(0),
+            platform_handle: Cell::new(unsafe { std::mem::MaybeUninit::zeroed().assume_init() }),
             tlab: UnsafeCell::new(TLAB::new()),
             stack_bounds: OnceCell::new(),
             barrier: Cell::new(BarrierSelector::NoBarrier),
             alloc_fastpath: Cell::new(AllocFastPath::None),
             max_non_los_default_alloc_bytes: Cell::new(0),
             take_yieldpoint: AtomicI32::new(0),
+            tid: AtomicU64::new(0),
             context: ctx.unwrap_or_else(|| VM::ThreadContext::new(collector_context)),
             mmtk_mutator: UnsafeCell::new(MaybeUninit::uninit()),
             has_collector_context: AtomicBool::new(collector_context),
@@ -266,22 +284,64 @@ impl<VM: VirtualMachine> Thread<VM> {
         }
     }
 
-    /*pub(crate) fn start_gc(self: &Arc<Self>, ctx: Box<GCWorker<MemoryManager<VM>>>) {
+    pub unsafe fn register_mutator_manual() -> Arc<Self> {
+        let this = Self::for_mutator(VM::ThreadContext::new(false));
         unsafe {
-            self.set_exec_status(ThreadState::InNative);
-            let this = self.clone();
-            std::thread::spawn(move || {
-                let vmkit = VM::get().vmkit();
-                init_current_thread(this.clone());
-                vmkit.thread_manager().add_thread(this.clone());
-                mmtk::memory_manager::start_worker(
-                    &vmkit.mmtk,
-                    mmtk::util::VMWorkerThread(this.to_vm_thread()),
-                    ctx,
-                );
-            });
+            this.tid.store(libc::gettid() as _, Ordering::Relaxed);
         }
-    }*/
+        init_current_thread(this.clone());
+        let constraints = VM::get().vmkit().mmtk.get_plan().constraints();
+        this.max_non_los_default_alloc_bytes
+            .set(constraints.max_non_los_default_alloc_bytes);
+        this.barrier.set(constraints.barrier);
+        let selector = mmtk::memory_manager::get_allocator_mapping(
+            &VM::get().vmkit().mmtk,
+            AllocationSemantics::Default,
+        );
+        match selector {
+            AllocatorSelector::BumpPointer(_) | AllocatorSelector::Immix(_) => {
+                this.alloc_fastpath.set(AllocFastPath::TLAB);
+            }
+
+            AllocatorSelector::FreeList(_) => {
+                this.alloc_fastpath.set(AllocFastPath::FreeList);
+            }
+
+            _ => this.alloc_fastpath.set(AllocFastPath::None),
+        }
+
+        this.stack_bounds
+            .set(StackBounds::current_thread_stack_bounds())
+            .unwrap();
+        let vmkit = VM::get().vmkit();
+        if !this.is_collector_thread() && !this.ignore_handshakes_and_gc() {
+            let mutator = mmtk::memory_manager::bind_mutator(
+                &vmkit.mmtk,
+                VMMutatorThread(this.to_vm_thread()),
+            );
+            unsafe { this.mmtk_mutator.get().write(MaybeUninit::new(*mutator)) };
+            this.enable_yieldpoints();
+        }
+        vmkit.thread_manager.add_thread(this.clone());
+        unsafe {
+            let handle;
+            #[cfg(unix)]
+            {
+                handle = libc::pthread_self();
+            }
+            #[cfg(windows)]
+            {
+                handle = winapi::um::processthreadsapi::GetCurrentThread();
+            }
+
+            this.platform_handle.set(handle);
+        }
+        this
+    }
+    pub unsafe fn unregister_mutator_manual() {
+        let current = Self::current();
+        current.terminate();
+    }
 
     /// Start execution of `self` by creating and starting a native thread.
     pub fn start<F, R>(self: &Arc<Self>, f: F) -> JoinHandle<Option<R>>
@@ -295,27 +355,6 @@ impl<VM: VirtualMachine> Thread<VM> {
             std::thread::spawn(move || this.startoff(f))
         }
     }
-
-    pub fn to_vm_thread(&self) -> VMThread {
-        unsafe { std::mem::transmute(self) }
-    }
-
-    pub fn stack_bounds(&self) -> &StackBounds {
-        self.stack_bounds.get().unwrap()
-    }
-
-    pub fn barrier(&self) -> BarrierSelector {
-        self.barrier.get()
-    }
-
-    pub fn alloc_fastpath(&self) -> AllocFastPath {
-        self.alloc_fastpath.get()
-    }
-
-    pub fn max_non_los_default_alloc_bytes(&self) -> usize {
-        self.max_non_los_default_alloc_bytes.get()
-    }
-
     /// Begin execution of current thread by calling `run` method
     /// on the provided context.
     fn startoff<F, R>(self: &Arc<Self>, f: F) -> Option<R>
@@ -323,6 +362,9 @@ impl<VM: VirtualMachine> Thread<VM> {
         F: FnOnce() -> R,
         R: Send + 'static,
     {
+        unsafe {
+            self.tid.store(libc::gettid() as _, Ordering::Relaxed);
+        }
         init_current_thread(self.clone());
         let constraints = VM::get().vmkit().mmtk.get_plan().constraints();
         self.max_non_los_default_alloc_bytes
@@ -358,15 +400,47 @@ impl<VM: VirtualMachine> Thread<VM> {
             self.enable_yieldpoints();
         }
         vmkit.thread_manager.add_thread(self.clone());
+        unsafe {
+            let handle;
+            #[cfg(unix)]
+            {
+                handle = libc::pthread_self();
+            }
+            #[cfg(windows)]
+            {
+                handle = winapi::um::processthreadsapi::GetCurrentThread();
+            }
 
+            self.platform_handle.set(handle);
+        }
         let _result = std::panic::catch_unwind(AssertUnwindSafe(|| f()));
 
-        self.terminate();
+        unsafe { self.terminate() };
 
         _result.ok()
     }
 
-    fn terminate(&self) {
+    pub fn to_vm_thread(&self) -> VMThread {
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn stack_bounds(&self) -> &StackBounds {
+        self.stack_bounds.get().unwrap()
+    }
+
+    pub fn barrier(&self) -> BarrierSelector {
+        self.barrier.get()
+    }
+
+    pub fn alloc_fastpath(&self) -> AllocFastPath {
+        self.alloc_fastpath.get()
+    }
+
+    pub fn max_non_los_default_alloc_bytes(&self) -> usize {
+        self.max_non_los_default_alloc_bytes.get()
+    }
+
+    pub unsafe fn terminate(&self) {
         self.is_joinable.store(true, Ordering::Relaxed);
         self.monitor.notify_all();
         self.add_about_to_terminate();
@@ -661,8 +735,17 @@ impl<VM: VirtualMachine> Thread<VM> {
     ///    and reacquire the lock, since there cannot be a race with broadcast() once
     ///    we have committed to not calling wait() again.
     pub fn check_block(&self) {
+        self.stack_pointer
+            .store(current_stack_pointer().as_usize(), Ordering::Relaxed);
         self.context.save_thread_state();
         self.check_block_no_save_context();
+    }
+
+    /// Return this thread's stack pointer.
+    ///
+    /// Note: Does not guarantee that the returned value is currently active stack pointer.
+    pub fn stack_pointer(&self) -> Address {
+        unsafe { Address::from_usize(self.stack_pointer.load(Ordering::Relaxed)) }
     }
 
     fn enter_native_blocked_impl(&self) {
@@ -768,7 +851,7 @@ impl<VM: VirtualMachine> Thread<VM> {
                             current_thread::<VM>().thread_id,
                             self.thread_id
                         );
-                        
+
                         while A::has_block_request_with_token(self, token)
                             && !A::is_blocked(self)
                             && !self.is_about_to_terminate()
@@ -802,6 +885,11 @@ impl<VM: VirtualMachine> Thread<VM> {
     pub fn current() -> &'static Thread<VM> {
         current_thread::<VM>()
     }
+
+    pub fn platform_handle(&self) -> PlatformThreadHandle {
+        self.platform_handle.get()
+    }
+
 
     pub fn begin_pair_with<'a>(
         &'a self,
@@ -1195,6 +1283,7 @@ pub struct ThreadManager<VM: VirtualMachine> {
     soft_handshake_left: AtomicUsize,
     soft_handshake_data_lock: Monitor<()>,
     handshake_lock: Monitor<RefCell<Vec<Arc<Thread<VM>>>>>,
+    thread_suspension: ThreadSuspension,
 }
 
 struct ThreadManagerInner<VM: VirtualMachine> {
@@ -1220,6 +1309,11 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
             soft_handshake_left: AtomicUsize::new(0),
             soft_handshake_data_lock: Monitor::new(()),
             handshake_lock: Monitor::new(RefCell::new(Vec::new())),
+            thread_suspension: if cfg!(feature = "uncooperative") {
+                ThreadSuspension::SignalBased
+            } else {
+                ThreadSuspension::Yieldpoint
+            },
         }
     }
 
@@ -1306,87 +1400,121 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
     /// Fixpoint until there are no threads that we haven't blocked. Fixpoint is needed to
     /// catch the (unlikely) case that a thread spawns another thread while we are waiting.
     pub fn block_all_mutators_for_gc(&self) -> Vec<Arc<Thread<VM>>> {
+        if self.thread_suspension == ThreadSuspension::Yieldpoint {
+            let mut handshake_threads = Vec::with_capacity(4);
+            loop {
+                let lock = self.inner.lock_no_handshake();
+                let lock = lock.borrow();
+                // (1) find all threads that need to be blocked for GC
 
-        let mut handshake_threads = Vec::with_capacity(4);
-        loop {
+                for i in 0..lock.threads.len() {
+                    if let Some(t) = lock.threads[i].clone() {
+                        if !t.is_collector_thread() && !t.ignore_handshakes_and_gc() {
+                            handshake_threads.push(t.clone());
+                        }
+                    }
+                }
+
+                drop(lock);
+                // (2) Remove any threads that have already been blocked from the list.
+                handshake_threads.retain(|t| {
+                    let lock = t.monitor().lock_no_handshake();
+                    if t.is_blocked_for::<GCBlockAdapter>()
+                        || t.block_unchecked::<GCBlockAdapter>(true).not_running()
+                    {
+                        drop(lock);
+                        false
+                    } else {
+                        drop(lock);
+                        true
+                    }
+                });
+
+                // (3) Quit trying to block threads if all threads are either blocked
+                //     or not running (a thread is "not running" if it is NEW or TERMINATED;
+                //     in the former case it means that the thread has not had start()
+                //     called on it while in the latter case it means that the thread
+                //     is either in the TERMINATED state or is about to be in that state
+                //     real soon now, and will not perform any heap-related work before
+                //     terminating).
+                if handshake_threads.is_empty() {
+                    break;
+                }
+                // (4) Request a block for GC from all other threads.
+                while let Some(thread) = handshake_threads.pop() {
+                    let lock = thread.monitor().lock_no_handshake();
+                    thread.block_unchecked::<GCBlockAdapter>(false);
+                    drop(lock);
+                }
+            }
+            // Deal with terminating threads to ensure that all threads are either dead to MMTk or stopped above.
+            self.process_about_to_terminate();
+
+            self.inner
+                .lock_no_handshake()
+                .borrow()
+                .threads
+                .iter()
+                .flatten()
+                .filter(|t| t.is_blocked_for::<GCBlockAdapter>())
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            self.process_about_to_terminate();
+            let mut handshake_threads = Vec::with_capacity(4);
+            for thread in self.threads() {
+                if !thread.is_collector_thread()
+                    && !thread.ignore_handshakes_and_gc()
+                    && !thread.is_about_to_terminate()
+                {
+                    let locker = ThreadSuspendLocker::new();
+
+                    unsafe {
+                        thread.suspend(&locker);
+                    }
+
+                    handshake_threads.push(thread.clone());
+                }
+            }
+            self.process_about_to_terminate();
+            handshake_threads
+        }
+    }
+
+    /// Unblock all mutators blocked for GC.
+    pub fn unblock_all_mutators_for_gc(&self) {
+        if self.thread_suspension == ThreadSuspension::Yieldpoint {
+            let mut handshake_threads = Vec::with_capacity(4);
             let lock = self.inner.lock_no_handshake();
             let lock = lock.borrow();
-            // (1) find all threads that need to be blocked for GC
 
-            for i in 0..lock.threads.len() {
-                if let Some(t) = lock.threads[i].clone() {
-                    if !t.is_collector_thread() && !t.ignore_handshakes_and_gc() {
-                        handshake_threads.push(t.clone());
+            for thread in lock.threads.iter() {
+                if let Some(thread) = thread {
+                    if !thread.is_collector_thread() {
+                        handshake_threads.push(thread.clone());
                     }
                 }
             }
 
             drop(lock);
-            // (2) Remove any threads that have already been blocked from the list.
-            handshake_threads.retain(|t| {
-                let lock = t.monitor().lock_no_handshake();
-                if t.is_blocked_for::<GCBlockAdapter>()
-                    || t.block_unchecked::<GCBlockAdapter>(true).not_running()
-                {
-                    drop(lock);
-                    false
-                } else {
-                    drop(lock);
-                    true
-                }
-            });
 
-            // (3) Quit trying to block threads if all threads are either blocked
-            //     or not running (a thread is "not running" if it is NEW or TERMINATED;
-            //     in the former case it means that the thread has not had start()
-            //     called on it while in the latter case it means that the thread
-            //     is either in the TERMINATED state or is about to be in that state
-            //     real soon now, and will not perform any heap-related work before
-            //     terminating).
-            if handshake_threads.is_empty() {
-                break;
-            }
-            // (4) Request a block for GC from all other threads.
             while let Some(thread) = handshake_threads.pop() {
                 let lock = thread.monitor().lock_no_handshake();
-                thread.block_unchecked::<GCBlockAdapter>(false);
+                thread.unblock::<GCBlockAdapter>();
                 drop(lock);
             }
-        }
-        // Deal with terminating threads to ensure that all threads are either dead to MMTk or stopped above.
-        self.process_about_to_terminate();
-
-        self.inner
-            .lock_no_handshake()
-            .borrow()
-            .threads
-            .iter()
-            .flatten()
-            .filter(|t| t.is_blocked_for::<GCBlockAdapter>())
-            .cloned()
-            .collect::<Vec<_>>()
-    }
-
-    /// Unblock all mutators blocked for GC.
-    pub fn unblock_all_mutators_for_gc(&self) {
-        let mut handshake_threads = Vec::with_capacity(4);
-        let lock = self.inner.lock_no_handshake();
-        let lock = lock.borrow();
-
-        for thread in lock.threads.iter() {
-            if let Some(thread) = thread {
-                if !thread.is_collector_thread() {
-                    handshake_threads.push(thread.clone());
+        } else {
+            for thread in self.threads() {
+                if !thread.is_collector_thread() && !thread.ignore_handshakes_and_gc() {
+                    let locker = ThreadSuspendLocker::new();
+                    unsafe {
+                        thread.resume(&locker);
+                    }
+                    if thread.is_blocked_for::<GCBlockAdapter>() {
+                        thread.unblock::<GCBlockAdapter>();
+                    }
                 }
             }
-        }
-
-        drop(lock);
-
-        while let Some(thread) = handshake_threads.pop() {
-            let lock = thread.monitor().lock_no_handshake();
-            thread.unblock::<GCBlockAdapter>();
-            drop(lock);
         }
     }
 }
@@ -1611,4 +1739,193 @@ impl<VM: VirtualMachine, F: Fn(&Arc<Thread<VM>>) -> bool> SoftHandshakeVisitor<V
     fn check_and_signal(&self, t: &Arc<Thread<VM>>) -> bool {
         self(t)
     }
+}
+
+pub const SIG_THREAD_SUSPEND_RESUME: i32 = libc::SIGUSR1;
+
+#[allow(dead_code)]
+pub struct ThreadSuspendLocker<'a> {
+    guard: MonitorGuard<'a, ()>,
+}
+
+impl<'a> ThreadSuspendLocker<'a> {
+    pub fn new() -> Self {
+        Self {
+            guard: THREAD_SUSPEND_MONITOR.lock_no_handshake(),
+        }
+    }
+}
+
+impl<VM: VirtualMachine> Thread<VM> {
+    /// Suspend the thread by sending a signal to it.
+    ///
+    /// This function internally uses `pthread_kill`.
+    ///
+    /// # SAFETY
+    ///
+    /// Suspends thread at random point of execution, does not guarantee any thread state consistency
+    /// and will not release any held locks, might trigger memory leaks or segfaults. Use at your own risk.
+    pub unsafe fn suspend(&self, _locker: &ThreadSuspendLocker<'_>) -> bool {
+        if self.suspend_count.load(Ordering::Relaxed) == 0 {
+            while self.platform_handle.get() == 0 {
+                std::thread::yield_now(); // spin wait for thread to be established
+            }
+            TARGET_THREAD.store(self as *const Self as *mut _, Ordering::Relaxed);
+            unsafe {
+                loop {
+                    // We must use pthread_kill to avoid queue-overflow problem with real-time signals.
+                    let result =
+                        libc::pthread_kill(self.platform_handle.get(), SIG_THREAD_SUSPEND_RESUME);
+                    if result != 0 {
+                        return false;
+                    }
+
+                    GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME.wait();
+                    if self.stack_pointer.load(Ordering::Relaxed) != 0 {
+                        break;
+                    }
+                    // Because of an alternative signal stack, we failed to suspend this thread.
+                    // Retry suspension again after yielding.
+                    std::thread::yield_now();
+                }
+            }
+        }
+
+        self.suspend_count.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+
+    /// Resume thread from suspended state.
+    ///
+    /// # SAFETY
+    ///
+    /// Resumes thread at random point of execution, does not guarantee any thread state consistency
+    /// and will not release any held locks, might trigger memory leaks or segfaults. Use at your own risk.
+    pub unsafe fn resume(&self, _locker: &ThreadSuspendLocker<'_>) {
+        if self.suspend_count.load(Ordering::Relaxed) == 1 {
+            // When allowing sigThreadSuspendResume interrupt in the signal handler by sigsuspend and SigThreadSuspendResume is actually issued,
+            // the signal handler itself will be called once again.
+            // There are several ways to distinguish the handler invocation for suspend and resume.
+            // 1. Use different signal numbers. And check the signal number in the handler.
+            // 2. Use some arguments to distinguish suspend and resume in the handler.
+            // 3. Use thread's flag.
+            // In this implementaiton, we take (3). suspend_count is used to distinguish it.
+            // Note that we must use pthread_kill to avoid queue-overflow problem with real-time signals.
+            TARGET_THREAD.store(self as *const Self as *mut _, Ordering::Relaxed);
+            unsafe {
+                if libc::pthread_kill(self.platform_handle.get(), SIG_THREAD_SUSPEND_RESUME)
+                    == libc::ESRCH
+                {
+                    return;
+                }
+
+                GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME.wait();
+            }
+        }
+
+        self.suspend_count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/* thread signal handlers for STW implementation
+
+    NOTE: DO NOT USE `Drop` types in the code! It migth not be cleaned up properly.
+*/
+
+static TARGET_THREAD: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+extern "C-unwind" fn signal_handler_suspend_resume<VM: VirtualMachine>(
+    _signal: i32,
+    _info: *const libc::siginfo_t,
+) {
+    let target = TARGET_THREAD.load(Ordering::Relaxed).cast::<Thread<VM>>();
+    let thread = unsafe { target.as_ref().unwrap() };
+    // empty GC caches if there's any.
+    unsafe {
+        MemoryManager::<VM>::flush_tlab(thread);
+    }
+    if thread.suspend_count.load(Ordering::Relaxed) != 0 {
+        // This is signal handler invocation that is intended to be used to resume sigsuspend.
+        // So this handler invocation itself should not process.
+        //
+        // When signal comes, first, the system calls signal handler. And later, sigsuspend will be resumed. Signal handler invocation always precedes.
+        // So, the problem never happens that suspended.store(true, ...) will be executed before the handler is called.
+        // http://pubs.opengroup.org/onlinepubs/009695399/functions/sigsuspend.html
+        return;
+    }
+
+    let approximate_stack_pointer = current_stack_pointer();
+    if !thread.stack_bounds().contains(approximate_stack_pointer) {
+        // This happens if we use an alternative signal stack.
+        // 1. A user-defined signal handler is invoked with an alternative signal stack.
+        // 2. In the middle of the execution of the handler, we attempt to suspend the target thread.
+        // 3. A nested signal handler is executed.
+        // 4. The stack pointer saved in the machine context will be pointing to the alternative signal stack.
+        // In this case, we back off the suspension and retry a bit later.
+        thread.stack_pointer.store(0, Ordering::Relaxed);
+        GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME.post();
+
+        return;
+    }
+    thread
+        .stack_pointer
+        .store(approximate_stack_pointer.as_usize(), Ordering::Release);
+    // Allow suspend caller to see that this thread is suspended.
+    // sem_post is async-signal-safe function. It means that we can call this from a signal handler.
+    // http://pubs.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_04.html#tag_02_04_03
+    //
+    // And sem_post emits memory barrier that ensures that stack_pointer is correctly saved.
+    // http://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html#tag_04_11
+    GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME.post();
+
+    // Reaching here, sigThreadSuspendResume is blocked in this handler (this is configured by sigaction's sa_mask).
+    // So before calling sigsuspend, sigThreadSuspendResume to this thread is deferred. This ensures that the handler is not executed recursively.
+    let mut blocked_signal_set = std::mem::MaybeUninit::uninit();
+    thread.acknowledge_block_requests();
+    unsafe {
+        libc::sigfillset(blocked_signal_set.as_mut_ptr());
+        libc::sigdelset(blocked_signal_set.as_mut_ptr(), SIG_THREAD_SUSPEND_RESUME);
+        libc::sigsuspend(blocked_signal_set.as_mut_ptr());
+    }
+
+    let target = TARGET_THREAD.load(Ordering::Relaxed).cast::<Thread<VM>>();
+    let thread = unsafe { target.as_ref().unwrap() };
+    // Allow resume caller to see that this thread is resumed.
+    thread.stack_pointer.store(0, Ordering::Relaxed);
+    GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME.post();
+}
+
+pub(crate) fn initialize_threading<VM: VirtualMachine>() {
+    static ONCE: Once = Once::new();
+
+    ONCE.call_once(|| unsafe {
+        let mut action: libc::sigaction = std::mem::MaybeUninit::zeroed().assume_init();
+
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaddset(&mut action.sa_mask, SIG_THREAD_SUSPEND_RESUME);
+
+        action.sa_sigaction = signal_handler_suspend_resume::<VM> as usize;
+        action.sa_flags = libc::SA_RESTART | libc::SA_SIGINFO;
+
+        let res = libc::sigaction(SIG_THREAD_SUSPEND_RESUME, &action, std::ptr::null_mut());
+        if res != 0 {
+            eprintln!("failed to install signal handler for SIG_THREAD_SUSPEND_RESUME");
+            std::process::abort();
+        }
+    });
+}
+
+pub(crate) static THREAD_SUSPEND_MONITOR: Monitor<()> = Monitor::new(());
+pub(crate) static GLOBAL_SEMAPHORE_FOR_SUSPEND_RESUME: LazyLock<Semaphore> =
+    LazyLock::new(|| Semaphore::new(0));
+
+/// Thread suspension method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSuspension {
+    /// Thread suspension is done by periodically calling [`Thread::yieldpoint`]. This is the most
+    /// precise method and also is the most safe one: we are in absolute control of thread state in this mode.
+    Yieldpoint,
+    /// Thread suspension is done by sending a signal to the thread. This is less precise and less safe:
+    /// we are not in absolute control of thread state in this mode.
+    SignalBased,
 }

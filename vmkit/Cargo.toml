@@ -16,12 +16,18 @@ log = "0.4.25"
 mmtk = { git = "https://github.com/mmtk/mmtk-core" }
 parking_lot = "0.12.3"
 rand = "0.9.0"
+sysinfo = "0.33.1"
 
 
 
 
 [features]
-default = ["cooperative"]
+
+
+default = ["uncooperative"]
+
+uncooperative = ["cooperative"]
+
 # VMKit is built for use in cooperative runtime. Such runtime
 # would be able to use write barriers and safepoints. Such environment
 # must also provide precise object layout (stack can be uncooperative).
@@ -34,9 +40,5 @@ full-precise = []
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["everything"] }
 
-[dev-dependencies]
-criterion = "0.5.1"
-
-[[bench]]
-name = "binarytrees"
-harness = false
+[lib]
+crate-type = ["cdylib", "rlib"]

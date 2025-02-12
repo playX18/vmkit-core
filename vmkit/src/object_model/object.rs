@@ -138,6 +138,35 @@ impl VMKitObject {
         let metadata = self.header::<VM>().metadata().gc_metadata();
         let overhead = self.hashcode_overhead::<VM, false>();
 
+        let res = if metadata.instance_size != 0 {
+            raw_align_up(
+                metadata.instance_size + size_of::<HeapObjectHeader<VM>>(),
+                align_of::<usize>(),
+            ) + overhead
+        } else {
+            let Some(compute_size) = metadata.compute_size else {
+                panic!("compute_size is not set for object at {}", self.0);
+            };
+
+            raw_align_up(
+                compute_size(self) + size_of::<HeapObjectHeader<VM>>(),
+                align_of::<usize>(),
+            ) + overhead
+        };
+        
+        res
+    }
+
+    /// Returns the number of bytes required when the `VMKitObject` is copied.
+    ///
+    /// # Returns
+    ///
+    /// * `usize` - The number of bytes required.
+    #[inline(always)]
+    pub fn bytes_required_when_copied<VM: VirtualMachine>(self) -> usize {
+        let metadata = self.header::<VM>().metadata().gc_metadata();
+        let overhead = self.hashcode_overhead::<VM, true>();
+
         if metadata.instance_size != 0 {
             raw_align_up(
                 metadata.instance_size + size_of::<HeapObjectHeader<VM>>(),
@@ -153,19 +182,6 @@ impl VMKitObject {
                 align_of::<usize>(),
             ) + overhead
         }
-    }
-
-    /// Returns the number of bytes required when the `VMKitObject` is copied.
-    ///
-    /// # Returns
-    ///
-    /// * `usize` - The number of bytes required.
-    #[inline(always)]
-    pub fn bytes_required_when_copied<VM: VirtualMachine>(&self) -> usize {
-        let metadata = self.header::<VM>().metadata().gc_metadata();
-        let overhead = self.hashcode_overhead::<VM, true>();
-
-        raw_align_up(metadata.instance_size, align_of::<usize>()) + overhead
     }
 
     /// Returns the overhead for the hashcode of the `VMKitObject`.

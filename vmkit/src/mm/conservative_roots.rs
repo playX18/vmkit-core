@@ -29,14 +29,7 @@ impl ConservativeRoots {
         if pointer < starting_address || pointer > ending_address {
             return;
         }
-
-        if self
-            .roots
-            .contains(unsafe { &ObjectReference::from_raw_address_unchecked(pointer) })
-        {
-            return;
-        }
-
+        
         let Some(start) = mmtk::memory_manager::find_object_from_internal_pointer(
             pointer,
             self.internal_pointer_limit,
@@ -72,7 +65,7 @@ impl ConservativeRoots {
     }
 
     pub fn add_to_factory<SL: Slot>(&mut self, factory: &mut impl RootsWorkFactory<SL>) {
-        factory.create_process_tpinning_roots_work(std::mem::take(
+        factory.create_process_pinning_roots_work(std::mem::take(
             &mut self.roots.clone().into_iter().collect(),
         ));
     }

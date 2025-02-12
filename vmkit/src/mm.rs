@@ -10,8 +10,8 @@ use crate::{
 use easy_bitfield::{AtomicBitfieldContainer, ToBitfield};
 use mmtk::{
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, FreeListAllocator, ImmixAllocator},
-        metadata::side_metadata::GLOBAL_SIDE_METADATA_BASE_ADDRESS,
+        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
+        metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
         VMMutatorThread,
     },
     vm::{
@@ -147,13 +147,13 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                         return object;
                     }
 
-                    return Self::allocate_slow(thread, size, alignment, metadata, semantics)
+                    return Self::allocate_slow(thread, size, alignment, metadata, semantics);
                 },
 
-                _ => ()
+                _ => (),
             },
 
-            _ => ()
+            _ => (),
         }
 
         Self::allocate_out_of_line(thread, orig_size, alignment, metadata, orig_semantics)
@@ -388,10 +388,11 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         match thread.barrier() {
             BarrierSelector::ObjectBarrier => unsafe {
                 let addr = src.as_address();
-                let meta_addr = GLOBAL_SIDE_METADATA_BASE_ADDRESS + (addr >> 6);
+                let meta_addr = GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS + (addr >> 6);
                 let shift = (addr >> 3) & 0b111;
                 let byte_val = meta_addr.load::<u8>();
                 if (byte_val >> shift) & 1 == 1 {
+                    
                     thread.mutator().barrier().object_reference_write_slow(
                         src.as_object_unchecked(),
                         slot,
