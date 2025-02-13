@@ -10,7 +10,10 @@ use crate::{
 use easy_bitfield::{AtomicBitfieldContainer, ToBitfield};
 use mmtk::{
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator}, conversions::raw_align_up, metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, VMMutatorThread
+        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
+        conversions::raw_align_up,
+        metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
+        VMMutatorThread,
     },
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
@@ -44,6 +47,7 @@ impl<VM: VirtualMachine> VMBinding for MemoryManager<VM> {
 }
 
 pub mod active_plan;
+pub mod align;
 pub mod aslr;
 pub mod collection;
 pub mod conservative_roots;
@@ -137,7 +141,9 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             AllocationSemantics::Default => match thread.alloc_fastpath() {
                 AllocFastPath::TLAB => unsafe {
                     let tlab = thread.tlab.get().as_mut().unwrap();
-                    let object_start = tlab.allocate(size, alignment);
+                    let object_start =
+                        tlab.allocate::<VM>(size, alignment, OBJECT_REF_OFFSET as usize);
+
                     if !object_start.is_zero() {
                         object_start.store(HeapObjectHeader::<VM> {
                             metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
@@ -167,14 +173,13 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         alignment: usize,
         metadata: VM::Metadata,
     ) -> VMKitObject {
-       
         unsafe {
             Self::flush_tlab(thread);
             let object_start = mmtk::memory_manager::alloc(
                 thread.mutator(),
                 size,
                 alignment,
-                0,
+                OBJECT_REF_OFFSET as usize,
                 AllocationSemantics::Los,
             );
 
@@ -186,7 +191,12 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
 
             //Self::set_vo_bit(object);
             Self::refill_tlab(thread);
-            mmtk::memory_manager::post_alloc(thread.mutator(), object.as_object_unchecked(), size, AllocationSemantics::Los);
+            mmtk::memory_manager::post_alloc(
+                thread.mutator(),
+                object.as_object_unchecked(),
+                size,
+                AllocationSemantics::Los,
+            );
             object
         }
     }
@@ -206,7 +216,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 thread.mutator(),
                 size,
                 alignment,
-                0,
+                OBJECT_REF_OFFSET as usize,
                 AllocationSemantics::NonMoving,
             );
 
@@ -236,7 +246,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 thread.mutator(),
                 size,
                 alignment,
-                0,
+                OBJECT_REF_OFFSET as usize,
                 AllocationSemantics::Immortal,
             );
 
@@ -264,8 +274,13 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
     ) -> VMKitObject {
         unsafe {
             Self::flush_tlab(thread);
-            let object_start =
-                mmtk::memory_manager::alloc_slow(thread.mutator(), size, alignment, 0, semantics);
+            let object_start = mmtk::memory_manager::alloc_slow(
+                thread.mutator(),
+                size,
+                alignment,
+                OBJECT_REF_OFFSET as usize,
+                semantics,
+            );
 
             object_start.store(HeapObjectHeader::<VM> {
                 metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
@@ -393,7 +408,6 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 let shift = (addr >> 3) & 0b111;
                 let byte_val = meta_addr.load::<u8>();
                 if (byte_val >> shift) & 1 == 1 {
-                    
                     thread.mutator().barrier().object_reference_write_slow(
                         src.as_object_unchecked(),
                         slot,
@@ -452,17 +466,26 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         Self::object_reference_write_post(thread, src, slot, target);
     }
 
-
     pub fn disable_gc() {
-        VM::get().vmkit().gc_disabled_depth.fetch_add(1, atomic::Ordering::SeqCst);
+        VM::get()
+            .vmkit()
+            .gc_disabled_depth
+            .fetch_add(1, atomic::Ordering::SeqCst);
     }
 
     pub fn enable_gc() {
-        VM::get().vmkit().gc_disabled_depth.fetch_sub(1, atomic::Ordering::SeqCst);
+        VM::get()
+            .vmkit()
+            .gc_disabled_depth
+            .fetch_sub(1, atomic::Ordering::SeqCst);
     }
 
     pub fn is_gc_enabled() -> bool {
-        VM::get().vmkit().gc_disabled_depth.load(atomic::Ordering::SeqCst) == 0
+        VM::get()
+            .vmkit()
+            .gc_disabled_depth
+            .load(atomic::Ordering::SeqCst)
+            == 0
     }
 }
 

@@ -113,7 +113,7 @@ impl NodeRef {
         let node = MemoryManager::<BenchVM>::allocate(
             thread,
             size_of::<Node>(),
-            16,
+            32,
             &METADATA,
             AllocationSemantics::Default,
         );

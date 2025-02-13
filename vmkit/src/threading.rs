@@ -24,7 +24,6 @@ use crate::{
         tlab::TLAB,
         AllocFastPath, MemoryManager,
     },
-    object_model::compression::CompressedOps,
     semaphore::Semaphore,
     sync::{Monitor, MonitorGuard},
     VirtualMachine,

@@ -1,4 +1,7 @@
-use std::{marker::PhantomData, sync::atomic::{AtomicBool, AtomicUsize}};
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicBool, AtomicUsize},
+};
 
 use mm::{aslr::aslr_vm_layout, traits::SlotExtra, MemoryManager};
 use mmtk::{MMTKBuilder, MMTK};
@@ -8,12 +11,12 @@ pub mod machine_context;
 pub mod mm;
 pub mod object_model;
 pub mod options;
+pub mod platform;
 pub mod semaphore;
 pub mod sync;
 pub mod threading;
-pub mod platform;
 
-#[cfg(feature="uncooperative")]
+#[cfg(feature = "uncooperative")]
 pub mod bdwgc_shim;
 
 pub trait VirtualMachine: Sized + 'static + Send + Sync {
@@ -22,7 +25,8 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Metadata: object_model::metadata::Metadata<Self>;
     type Slot: SlotExtra;
 
-    const MAX_ALIGNMENT: usize = 16;
+    const ALIGNMENT_VALUE: u32 = 0xdead_beef;
+    const MAX_ALIGNMENT: usize = 32;
     const MIN_ALIGNMENT: usize = 8;
 
     /// Does this VM use conservative tracing? If `true` then VM can
