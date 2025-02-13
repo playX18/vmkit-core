@@ -1,5 +1,4 @@
 use std::fmt;
-
 use crate::mm::traits::SlotExtra;
 use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};

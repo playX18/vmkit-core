@@ -5,32 +5,118 @@
 //! # Notes
 //!
 //! This shim is highly experimental and not all BDWGC APIs are implemented.
-#![allow(non_upper_case_globals)]
+#![allow(non_upper_case_globals, non_camel_case_types)]
 use std::{
     collections::HashSet,
     ffi::CStr,
+    hash::Hash,
     mem::transmute,
-    sync::{Arc, Barrier, LazyLock, OnceLock},
+    ptr::null_mut,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Barrier, LazyLock, OnceLock,
+    },
 };
 
 use crate::{
-    mm::{conservative_roots::ConservativeRoots, traits::ToSlot, MemoryManager},
+    mm::{
+        conservative_roots::ConservativeRoots, stack_bounds::StackBounds, traits::ToSlot,
+        MemoryManager,
+    },
     object_model::{
         metadata::{GCMetadata, Metadata, TraceCallback},
         object::VMKitObject,
     },
+    platform::dynload::dynamic_libraries_sections,
     threading::{GCBlockAdapter, Thread, ThreadContext},
     VMKit, VirtualMachine,
 };
 use easy_bitfield::*;
-use mmtk::{util::Address, vm::slot::SimpleSlot, AllocationSemantics, MMTKBuilder};
+use mmtk::{
+    util::Address,
+    vm::{slot::SimpleSlot, ObjectTracer},
+    AllocationSemantics, MMTKBuilder,
+};
 use parking_lot::{Mutex, Once};
 use sysinfo::{MemoryRefreshKind, RefreshKind};
+
+const GC_MAX_MARK_PROCS: usize = 1 << 6;
+const MAXOBJKINDS: usize = 24;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[repr(C)]
+pub enum ObjectKind {
+    Composite,
+    WithDescr(u8),
+}
+
+impl ToBitfield<usize> for ObjectKind {
+    fn to_bitfield(self) -> usize {
+        match self {
+            Self::Composite => 0,
+            Self::WithDescr(kind) => 2 + kind as usize,
+        }
+    }
+
+    fn one() -> Self {
+        unreachable!()
+    }
+
+    fn zero() -> Self {
+        Self::Composite
+    }
+}
+
+impl FromBitfield<usize> for ObjectKind {
+    fn from_bitfield(value: usize) -> Self {
+        match value {
+            0 => Self::Composite,
+            _ => Self::WithDescr((value - 2) as u8),
+        }
+    }
+
+    fn from_i64(value: i64) -> Self {
+        Self::from_bitfield(value as usize)
+    }
+}
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct obj_kind {
+    pub ok_freelist: *mut *mut libc::c_void,
+    pub ok_reclaim_list: *mut *mut libc::c_void,
+
+    pub ok_descriptor: usize,
+    pub ok_relocate_descr: bool,
+    pub ok_init: bool,
+}
 
 /// A BDWGC type that implements VirtualMachine.
 pub struct BDWGC {
     vmkit: VMKit<Self>,
     roots: Mutex<HashSet<(Address, Address)>>,
+    disappearing_links: Mutex<HashSet<DLink>>,
+    mark_procs: Mutex<[Option<GCMarkProc>; GC_MAX_MARK_PROCS]>,
+    n_procs: AtomicUsize,
+    obj_kinds: Mutex<[Option<obj_kind>; MAXOBJKINDS]>,
+    n_kinds: AtomicUsize,
+}
+
+unsafe impl Send for BDWGC {}
+unsafe impl Sync for BDWGC {}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct DLink {
+    object: VMKitObject,
+    link: Address,
+}
+
+impl Hash for DLink {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let hashcode = self.object.hashcode::<BDWGC>();
+        hashcode.hash(state);
+        self.link.hash(state);
+    }
 }
 
 pub struct BDWGCThreadContext;
@@ -79,6 +165,26 @@ impl VirtualMachine for BDWGC {
 
     fn prepare_for_roots_re_scanning() {}
 
+    fn process_weak_refs(
+        _worker: &mut mmtk::scheduler::GCWorker<MemoryManager<Self>>,
+        _tracer_context: impl mmtk::vm::ObjectTracerContext<MemoryManager<Self>>,
+    ) -> bool {
+        let bdwgc = BDWGC::get();
+        let mut disappearing_links = bdwgc.disappearing_links.lock();
+
+        disappearing_links.retain(|link| unsafe {
+            let base = link.object.as_object_unchecked();
+            if !base.is_reachable() {
+                link.link.store(Address::ZERO);
+                false
+            } else {
+                true
+            }
+        });
+
+        false
+    }
+
     fn forward_weak_refs(
         _worker: &mut mmtk::scheduler::GCWorker<crate::mm::MemoryManager<Self>>,
         _tracer_context: impl mmtk::vm::ObjectTracerContext<crate::mm::MemoryManager<Self>>,
@@ -104,10 +210,11 @@ impl VirtualMachine for BDWGC {
         >,
     ) {
         let _ = tls;
-        let mut croots = ConservativeRoots::new();
-
-        unsafe {
-            croots.add_span(gc_data_start(), gc_data_end());
+        let mut croots = ConservativeRoots::new(256);
+        for (start, end) in dynamic_libraries_sections() {
+            unsafe {
+                croots.add_span(start, end);
+            }
         }
 
         for (low, high) in BDWGC::get().roots.lock().iter() {
@@ -138,13 +245,12 @@ impl VirtualMachine for BDWGC {
     }
 }
 
-type VTableAddress = BitField<usize, usize, 0, 48, false>;
-type IsAtomic = BitField<usize, bool, { VTableAddress::NEXT_BIT }, 1, false>;
-#[allow(dead_code)]
-type HasVTable = BitField<usize, bool, { IsAtomic::NEXT_BIT }, 1, false>;
+type VTableAddress = BitField<usize, usize, 0, 37, false>;
+type ObjectKindField = BitField<usize, ObjectKind, { VTableAddress::NEXT_BIT }, 6, false>;
 /// Object size in words, overrides [VTableAddress] as if vtable is present, object size must be available
 /// through it.
-type ObjectSize = BitField<usize, usize, 0, 48, false>;
+type ObjectSize = BitField<usize, usize, 0, 37, false>;
+type IsAtomic = BitField<usize, bool, { ObjectKindField::NEXT_BIT }, 1, false>;
 
 /// An object metadata. This allows GC to scan object fields. When you don't use `gcj` API and don't provide vtable
 /// this type simply stores object size and whether it is ATOMIC or no.
@@ -152,10 +258,65 @@ pub struct BDWGCMetadata {
     meta: usize,
 }
 
+impl BDWGCMetadata {
+    pub fn size(&self) -> usize {
+        ObjectSize::decode(self.meta) * BDWGC::MIN_ALIGNMENT
+    }
+
+    pub fn kind(&self) -> ObjectKind {
+        ObjectKindField::decode(self.meta)
+    }
+
+    pub fn is_atomic(&self) -> bool {
+        IsAtomic::decode(self.meta)
+    }
+}
+
 impl ToSlot<SimpleSlot> for BDWGCMetadata {
     fn to_slot(&self) -> Option<SimpleSlot> {
         None
     }
+}
+
+const GC_LOG_MAX_MARK_PROCS: usize = 6;
+const GC_DS_TAG_BITS: usize = 2;
+const GC_DS_TAGS: usize = (1 << GC_DS_TAG_BITS) - 1;
+const GC_DS_LENGTH: usize = 0;
+const GC_DS_BITMAP: usize = 1;
+const GC_DS_PROC: usize = 2;
+const GC_DS_PER_OBJECT: usize = 3;
+const GC_INDIR_PER_OBJ_BIAS: usize = 0x10;
+
+impl BDWGC {
+    unsafe fn proc(&self, descr: usize) -> Option<GCMarkProc> {
+        unsafe {
+            let guard = self.mark_procs.make_guard_unchecked();
+            let proc = guard[(descr >> GC_DS_TAG_BITS) & (GC_MAX_MARK_PROCS - 1)];
+            proc
+        }
+    }
+
+    unsafe fn env(&self, descr: usize) -> usize {
+        (descr >> (GC_DS_TAG_BITS + GC_LOG_MAX_MARK_PROCS)) as usize
+    }
+}
+
+unsafe fn mark_range_conservative(start: Address, end: Address, tracer: &mut dyn ObjectTracer) {
+    let mut cursor = start;
+    while cursor < end {
+        let word = cursor.load::<Address>();
+        if let Some(object) = mmtk::memory_manager::find_object_from_internal_pointer(word, 128) {
+            tracer.trace_object(object);
+        }
+
+        cursor += BDWGC::MIN_ALIGNMENT;
+    }
+}
+
+const SIGNB: usize = 1 << (usize::BITS - 1);
+
+struct MarkStackMeta<'a> {
+    tracer: &'a mut dyn ObjectTracer,
 }
 
 static CONSERVATIVE_METADATA: GCMetadata<BDWGC> = GCMetadata {
@@ -167,24 +328,125 @@ static CONSERVATIVE_METADATA: GCMetadata<BDWGC> = GCMetadata {
     }),
 
     trace: TraceCallback::TraceObject(|object, tracer| unsafe {
-        let is_atomic = IsAtomic::decode(object.header::<BDWGC>().metadata().meta);
-        if is_atomic {
+        let kind = object.header::<BDWGC>().metadata().kind();
+        if object.header::<BDWGC>().metadata().is_atomic() {
             return;
         }
-        println!("trace {:?}", object.object_start::<BDWGC>());
         let size = object.bytes_used::<BDWGC>();
+        let least_ha = mmtk::memory_manager::starting_heap_address();
+        let greatest_ha = mmtk::memory_manager::last_heap_address();
+        match kind {
+            ObjectKind::Composite => {
+                let mut cursor = object.object_start::<BDWGC>();
+                let end = cursor + size;
 
-        let mut cursor = object.object_start::<BDWGC>();
-        let end = cursor + size;
+                while cursor < end {
+                    let word = cursor.load::<Address>();
+                    if let Some(object) =
+                        mmtk::memory_manager::find_object_from_internal_pointer(word, 128)
+                    {
+                        tracer.trace_object(object);
+                    }
 
-        while cursor < end {
-            let word = cursor.load::<Address>();
-            if let Some(object) = mmtk::memory_manager::find_object_from_internal_pointer(word, 128)
-            {
-                tracer.trace_object(object);
+                    cursor += BDWGC::MIN_ALIGNMENT;
+                }
             }
 
-            cursor += BDWGC::MIN_ALIGNMENT;
+            ObjectKind::WithDescr(kind) => {
+                let vm = BDWGC::get();
+                'retry: loop {
+                    {
+                        let lock = vm.obj_kinds.make_guard_unchecked();
+                        let Some(kind) = &lock[kind as usize] else {
+                            return;
+                        };
+
+                        let mut descr = kind.ok_descriptor;
+
+                        let tag = descr & GC_DS_TAGS;
+
+                        match tag {
+                            GC_DS_LENGTH => {
+                                let start = object.as_address();
+                                let end = start + descr as usize;
+                                mark_range_conservative(start, end, tracer);
+                            }
+
+                            GC_DS_BITMAP => {
+                                descr &= !GC_DS_TAGS;
+                                let mut curent_p = object.as_address();
+                                while descr != 0 {
+                                    if descr & SIGNB == 0 {
+                                        continue;
+                                    }
+
+                                    let q = curent_p.load::<Address>();
+                                    if least_ha <= q && q <= greatest_ha {
+                                        if let Some(object) =
+                                            mmtk::memory_manager::find_object_from_internal_pointer(
+                                                q, 128,
+                                            )
+                                        {
+                                            tracer.trace_object(object);
+                                        }
+                                    }
+                                    descr <<= 1;
+                                    curent_p += BDWGC::MIN_ALIGNMENT;
+                                }
+                            }
+
+                            GC_DS_PROC => {
+                                let Some(proc) = vm.proc(descr) else {
+                                    return;
+                                };
+
+                                let mut mark_stack = MarkStackMeta { tracer };
+
+                                proc(
+                                    object.as_address().to_mut_ptr(),
+                                    Address::from_mut_ptr(&mut mark_stack).to_mut_ptr(),
+                                    Address::from_mut_ptr(&mut mark_stack).to_mut_ptr(),
+                                    vm.env(descr),
+                                );
+                            }
+
+                            GC_DS_PER_OBJECT => {
+                                if (descr & SIGNB) == 0 {
+                                    /* descriptor is in the object */
+                                    descr = object
+                                        .as_address()
+                                        .add(descr - GC_DS_PER_OBJECT)
+                                        .load::<usize>();
+                                    let _ = descr;
+                                    continue 'retry;
+                                } else {
+                                    /* decsriptor is in the type descriptor pointed to by the first "pointer-sized" word of the object */
+                                    let type_descr = object.as_address().load::<Address>();
+
+                                    if type_descr == Address::ZERO {
+                                        return;
+                                    }
+
+                                    descr = type_descr
+                                        .offset(
+                                            -(descr as isize
+                                                + (GC_INDIR_PER_OBJ_BIAS - GC_DS_PER_OBJECT)
+                                                    as isize),
+                                        )
+                                        .load::<usize>();
+                                    if descr == 0 {
+                                        return;
+                                    }
+                                    continue 'retry;
+                                }
+                            }
+
+                            _ => unreachable!(),
+                        }
+                    }
+                    break;
+                }
+            }
         }
     }),
 };
@@ -269,10 +531,7 @@ pub extern "C-unwind" fn GC_init() {
         env_logger::init_from_env("GC_VERBOSE");
 
         let mut builder = BUILDER.lock();
-        builder
-            .options
-            .plan
-            .set(mmtk::util::options::PlanSelector::Immix);
+
         if GC_use_entire_heap != 0 {
             let mem = sysinfo::System::new_with_specifics(
                 RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
@@ -288,6 +547,11 @@ pub extern "C-unwind" fn GC_init() {
         let vm = BDWGC {
             vmkit: VMKit::new(&mut builder),
             roots: Mutex::new(HashSet::new()),
+            disappearing_links: Mutex::new(HashSet::new()),
+            mark_procs: Mutex::new([None; GC_MAX_MARK_PROCS]),
+            n_procs: AtomicUsize::new(0),
+            n_kinds: AtomicUsize::new(0),
+            obj_kinds: Mutex::new([const { None }; 24]),
         };
 
         BDWGC_VM.set(vm).unwrap_or_else(|_| {
@@ -303,13 +567,18 @@ pub extern "C-unwind" fn GC_init() {
     });
 }
 
+#[repr(C)]
+pub struct GC_stack_base {
+    pub mem_base: *mut libc::c_void,
+}
+
 #[no_mangle]
-pub extern "C-unwind" fn GC_register_mutator() {
+pub extern "C-unwind" fn GC_register_my_thread(_stack_base: *mut GC_stack_base) {
     unsafe { Thread::<BDWGC>::register_mutator_manual() };
 }
 
 #[no_mangle]
-pub extern "C-unwind" fn GC_unregister_mutator() {
+pub extern "C-unwind" fn GC_unregister_my_thread() {
     unsafe { Thread::<BDWGC>::unregister_mutator_manual() };
 }
 
@@ -595,7 +864,9 @@ pub extern "C-unwind" fn GC_malloc(size: usize) -> *mut libc::c_void {
 #[no_mangle]
 pub extern "C-unwind" fn GC_malloc_atomic(size: usize) -> *mut libc::c_void {
     let vtable = BDWGCMetadata {
-        meta: ObjectSize::encode(size / BDWGC::MIN_ALIGNMENT) | IsAtomic::encode(true),
+        meta: ObjectSize::encode(size / BDWGC::MIN_ALIGNMENT)
+            | ObjectKindField::encode(ObjectKind::Composite)
+            | IsAtomic::encode(true),
     };
 
     MemoryManager::<BDWGC>::allocate(
@@ -611,6 +882,9 @@ pub extern "C-unwind" fn GC_malloc_atomic(size: usize) -> *mut libc::c_void {
 
 #[no_mangle]
 pub extern "C-unwind" fn GC_strdup(s: *const libc::c_char) -> *mut libc::c_char {
+    if s.is_null() {
+        return null_mut();
+    }
     let s = unsafe { CStr::from_ptr(s) };
     let buf = s.to_string_lossy();
     let bytes = buf.as_bytes();
@@ -685,7 +959,7 @@ pub extern "C-unwind" fn GC_realloc(old: *mut libc::c_void, size: usize) -> *mut
     let header = VMKitObject::from_address(Address::from_mut_ptr(old))
         .header::<BDWGC>()
         .metadata();
-    let mem = if IsAtomic::decode(header.meta) {
+    let mem = if header.is_atomic() {
         GC_malloc_atomic(size)
     } else {
         GC_malloc(size)
@@ -808,28 +1082,362 @@ pub extern "C-unwind" fn GC_malloc_atomic_ignore_off_page(size: usize) -> *mut l
 #[no_mangle]
 pub extern "C-unwind" fn GC_set_warn_proc(_: *mut libc::c_void) {}
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os="linux")] {
-        extern "C" {
-            static __data_start: *mut usize;
-            static __bss_start: *mut usize;
-            static _end: *mut usize;
-        }
+#[no_mangle]
+pub extern "C-unwind" fn GC_enable() {
+    MemoryManager::<BDWGC>::enable_gc();
+}
 
-        pub fn gc_data_start() -> Address {
-            unsafe {
-                println!("GC data start: {:p}", &__data_start);
-                Address::from_ptr(__data_start.cast::<libc::c_char>())
-            }
-        }
+#[no_mangle]
+pub extern "C-unwind" fn GC_disable() {
+    MemoryManager::<BDWGC>::disable_gc();
+}
 
-        pub fn gc_data_end() -> Address {
-            unsafe {
-                Address::from_ptr(_end.cast::<libc::c_char>())
-            }
-        }
+#[no_mangle]
+pub extern "C-unwind" fn GC_is_enabled() -> libc::c_int {
+    MemoryManager::<BDWGC>::is_gc_enabled() as _
+}
 
+#[no_mangle]
+pub extern "C-unwind" fn GC_register_disappearing_link(link: *mut libc::c_void) {
+    let base = GC_base(link);
+    let dlink = DLink {
+        object: VMKitObject::from_address(Address::from_mut_ptr(base)),
+        link: Address::from_mut_ptr(link),
+    };
 
+    BDWGC::get().disappearing_links.lock().insert(dlink);
+}
 
+#[no_mangle]
+pub extern "C-unwind" fn GC_unregister_disappearing_link(link: *mut libc::c_void) {
+    let base = GC_base(link);
+    let dlink = DLink {
+        object: VMKitObject::from_address(Address::from_mut_ptr(base)),
+        link: Address::from_mut_ptr(link),
+    };
+
+    BDWGC::get().disappearing_links.lock().remove(&dlink);
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_general_register_disappearing_link(
+    link: *mut libc::c_void,
+    obj: *mut libc::c_void,
+) -> libc::c_int {
+    let dlink = DLink {
+        object: VMKitObject::from_address(Address::from_mut_ptr(obj)),
+        link: Address::from_mut_ptr(link),
+    };
+
+    (!BDWGC::get().disappearing_links.lock().insert(dlink)) as _
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_register_finalizer(
+    obj: *mut libc::c_void,
+    finalizer: extern "C" fn(*mut libc::c_void),
+    cd: *mut libc::c_void,
+    ofn: *mut extern "C" fn(*mut libc::c_void),
+    ocd: *mut *mut libc::c_void,
+) {
+    let _ = obj; // TBD
+    let _ = finalizer; // TBD
+    let _ = cd; // TBD
+    let _ = ofn; // TBD
+    let _ = ocd; // TBD
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_register_finalizer_ignore_self(
+    obj: *mut libc::c_void,
+    finalizer: extern "C" fn(*mut libc::c_void),
+    cd: *mut libc::c_void,
+    ofn: *mut extern "C" fn(*mut libc::c_void),
+    ocd: *mut *mut libc::c_void,
+) {
+    let _ = obj; // TBD
+    let _ = finalizer; // TBD
+    let _ = cd; // TBD
+    let _ = ofn; // TBD
+    let _ = ocd; // TBD
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_register_finalizer_no_order(
+    obj: *mut libc::c_void,
+    finalizer: extern "C" fn(*mut libc::c_void),
+    cd: *mut libc::c_void,
+    ofn: *mut extern "C" fn(*mut libc::c_void),
+    ocd: *mut *mut libc::c_void,
+) {
+    let _ = obj; // TBD
+    let _ = finalizer; // TBD
+    let _ = cd; // TBD
+    let _ = ofn; // TBD
+    let _ = ocd; // TBD
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_register_finalizer_unreachable(
+    obj: *mut libc::c_void,
+    finalizer: extern "C" fn(*mut libc::c_void),
+    cd: *mut libc::c_void,
+    ofn: *mut extern "C" fn(*mut libc::c_void),
+    ocd: *mut *mut libc::c_void,
+) {
+    let _ = obj; // TBD
+    let _ = finalizer; // TBD
+    let _ = cd; // TBD
+    let _ = ofn; // TBD
+    let _ = ocd; // TBD
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_collect_a_little() {
+    GC_gcollect();
+}
+
+#[no_mangle]
+pub static mut GC_no_dls: i32 = 0;
+#[no_mangle]
+pub static mut GC_java_finalization: i32 = 0;
+
+#[no_mangle]
+pub static mut GC_all_interior_pointers: i32 = 1;
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_dlopen(path: *const libc::c_char, flags: i32) -> *mut libc::c_void {
+    unsafe { libc::dlopen(path, flags) }
+}
+
+#[repr(C)]
+pub struct GC_ms_entry {
+    pub opaque: Address,
+}
+
+pub type GCMarkProc = extern "C-unwind" fn(
+    addr: *mut usize,
+    mark_stack_top: *mut GC_ms_entry,
+    mark_stack_limit: *mut GC_ms_entry,
+    env: usize,
+) -> *mut GC_ms_entry;
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_new_kind(
+    fl: *mut *mut libc::c_void,
+    descr: usize,
+    adjust: libc::c_int,
+    clear: libc::c_int,
+) -> usize {
+    let vm = BDWGC::get();
+    let mut kinds = vm.obj_kinds.lock();
+    let result = vm.n_kinds.load(Ordering::Relaxed);
+
+    if result < MAXOBJKINDS {
+        vm.n_kinds.fetch_add(1, Ordering::Relaxed);
+        let kind = obj_kind {
+            ok_freelist: fl,
+            ok_reclaim_list: null_mut(),
+            ok_descriptor: descr,
+            ok_init: clear != 0,
+            ok_relocate_descr: adjust != 0,
+        };
+        kinds[result] = Some(kind);
+    } else {
+        panic!("too many kinds");
     }
+
+    result
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_new_proc(proc: GCMarkProc) -> usize {
+    let vm = BDWGC::get();
+    let mut procs = vm.mark_procs.lock();
+    let result = vm.n_procs.load(Ordering::Relaxed);
+    if result < GC_MAX_MARK_PROCS {
+        vm.n_procs.fetch_add(1, Ordering::Relaxed);
+        procs[result] = Some(proc);
+    } else {
+        panic!("too many mark procedures");
+    }
+
+    result
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_mark_and_push(
+    obj: *mut u8,
+    mark_stack_top: *mut libc::c_void,
+    _mark_stack_limit: *mut libc::c_void,
+    _src: *mut libc::c_void,
+) -> *mut libc::c_void {
+    // we fake mark_stack_top, this function does not push anything but invokes
+    // an MMTK tracer
+    let stack = Address::from_mut_ptr(mark_stack_top);
+    unsafe {
+        let x = stack.as_mut_ref::<MarkStackMeta>();
+        if let Some(object) =
+            mmtk::memory_manager::find_object_from_internal_pointer(Address::from_mut_ptr(obj), 128)
+        {
+            x.tracer.trace_object(object);
+        }
+    }
+
+    mark_stack_top
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_generic_malloc(size: usize, k: libc::c_int) -> *mut libc::c_void {
+    let vtable = BDWGCMetadata {
+        meta: ObjectSize::encode(size / BDWGC::MIN_ALIGNMENT)
+            | ObjectKindField::encode(ObjectKind::WithDescr(k as _)),
+    };
+
+    MemoryManager::<BDWGC>::allocate(
+        Thread::<BDWGC>::current(),
+        size,
+        BDWGC::MIN_ALIGNMENT,
+        vtable,
+        AllocationSemantics::Default,
+    )
+    .as_address()
+    .to_mut_ptr()
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_generic_malloc_uncollectable(
+    size: usize,
+    k: libc::c_int,
+) -> *mut libc::c_void {
+    let vtable = BDWGCMetadata {
+        meta: ObjectSize::encode(size / BDWGC::MIN_ALIGNMENT)
+            | ObjectKindField::encode(ObjectKind::WithDescr(k as _)),
+    };
+
+    MemoryManager::<BDWGC>::allocate(
+        Thread::<BDWGC>::current(),
+        size,
+        BDWGC::MIN_ALIGNMENT,
+        vtable,
+        AllocationSemantics::Immortal,
+    )
+    .as_address()
+    .to_mut_ptr()
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_generic_malloc_ignore_off_page(
+    size: usize,
+    k: libc::c_int,
+) -> *mut libc::c_void {
+    let vtable = BDWGCMetadata {
+        meta: ObjectSize::encode(size / BDWGC::MIN_ALIGNMENT)
+            | ObjectKindField::encode(ObjectKind::WithDescr(k as _)),
+    };
+
+    MemoryManager::<BDWGC>::allocate(
+        Thread::<BDWGC>::current(),
+        size,
+        BDWGC::MIN_ALIGNMENT,
+        vtable,
+        AllocationSemantics::Default,
+    )
+    .as_address()
+    .to_mut_ptr()
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_expand_hp(_: usize) {}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_is_visible(p: *mut libc::c_void) -> *mut libc::c_void {
+    p
+}
+
+unsafe fn gc_get_bit(bm: *const usize, i: usize) -> bool {
+    bm.add(i / size_of::<usize>()).read() >> (i % size_of::<usize>()) & 1 != 0
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_call_with_stack_base(
+    fun: extern "C-unwind" fn(*mut GC_stack_base, *mut libc::c_void),
+    arg: *mut libc::c_void,
+) {
+    let mut stack = GC_stack_base {
+        mem_base: StackBounds::current_thread_stack_bounds()
+            .origin()
+            .to_mut_ptr(),
+    };
+
+    fun(&mut stack, arg);
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_new_free_list() -> *mut *mut libc::c_void {
+    null_mut()
+}
+
+const BITMAP_BITS: usize = usize::BITS as usize - GC_DS_TAG_BITS;
+
+#[no_mangle]
+pub unsafe extern "C-unwind" fn GC_make_descriptor(bm: *const usize, len: usize) -> usize {
+    let mut last_set_bit = len as isize - 1;
+
+    unsafe {
+        while last_set_bit >= 0 && !gc_get_bit(bm, last_set_bit as _) {
+            last_set_bit -= 1;
+        }
+
+        if last_set_bit < 0 {
+            return 0;
+        }
+        let mut i = 0;
+
+        while i < last_set_bit {
+            if !gc_get_bit(bm, i as _) {
+                break;
+            }
+
+            i += 1;
+        }
+
+        if i == last_set_bit {
+            return (last_set_bit as usize + 1) | GC_DS_LENGTH;
+        }
+
+        if last_set_bit < BITMAP_BITS as isize {
+            let mut _d = SIGNB;
+
+            i = last_set_bit - 1;
+            while i >= 0 {
+                _d >>= 1;
+                if gc_get_bit(bm, i as _) {
+                    _d |= SIGNB;
+                }
+                i -= 1;
+            }
+        } else {
+            return (last_set_bit as usize + 1) | GC_DS_LENGTH;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C-unwind" fn GC_malloc_explicitly_typed(
+    size: usize,
+    descr: usize,
+) -> *mut libc::c_void {
+    let _ = descr;
+    GC_malloc(size)
+}
+
+#[no_mangle]
+pub unsafe extern "C-unwind" fn GC_malloc_explicitly_typed_ignore_off_page(
+    size: usize,
+    descr: usize,
+) -> *mut libc::c_void {
+    let _ = descr;
+    GC_malloc_ignore_off_page(size)
 }

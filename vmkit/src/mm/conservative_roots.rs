@@ -11,7 +11,7 @@ use mmtk::{
     vm::{slot::Slot, RootsWorkFactory},
 };
 
-use crate::{object_model::object::VMKitObject, options::OPTIONS, VirtualMachine};
+use crate::{object_model::object::VMKitObject, VirtualMachine};
 
 pub struct ConservativeRoots {
     pub roots: HashSet<ObjectReference>,
@@ -29,7 +29,7 @@ impl ConservativeRoots {
         if pointer < starting_address || pointer > ending_address {
             return;
         }
-        
+
         let Some(start) = mmtk::memory_manager::find_object_from_internal_pointer(
             pointer,
             self.internal_pointer_limit,
@@ -57,10 +57,10 @@ impl ConservativeRoots {
         }
     }
 
-    pub fn new() -> Self {
+    pub fn new(limit: usize) -> Self {
         Self {
             roots: HashSet::new(),
-            internal_pointer_limit: OPTIONS.interior_pointer_max_bytes,
+            internal_pointer_limit: limit,
         }
     }
 
@@ -86,14 +86,7 @@ impl<T, VM: VirtualMachine> InternalPointer<T, VM> {
         if !cfg!(feature = "cooperative") {
             unreachable!("Internal pointers are not supported in precise mode");
         }
-        debug_assert!(
-            mmtk::memory_manager::find_object_from_internal_pointer(
-                address,
-                OPTIONS.interior_pointer_max_bytes
-            )
-            .is_some(),
-            "Internal pointer is not in the heap"
-        );
+
         assert!(
             VM::CONSERVATIVE_TRACING,
             "Internal pointers are not supported without VM::CONSERVATIVE_TRACING set to true"
@@ -114,12 +107,9 @@ impl<T, VM: VirtualMachine> InternalPointer<T, VM> {
     ///
     /// Panics if the pointer is not in the heap.
     pub fn object(&self) -> VMKitObject {
-        mmtk::memory_manager::find_object_from_internal_pointer(
-            self.address,
-            OPTIONS.interior_pointer_max_bytes,
-        )
-        .unwrap()
-        .into()
+        mmtk::memory_manager::find_object_from_internal_pointer(self.address, 128)
+            .unwrap()
+            .into()
     }
 
     /// Return offset from the object start.

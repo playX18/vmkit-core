@@ -458,7 +458,6 @@ impl<VM: VirtualMachine> Thread<VM> {
         let vmkit = VM::get().vmkit();
         vmkit.thread_manager.add_main_thread(this.clone());
         mmtk::memory_manager::initialize_collection(&vmkit.mmtk, this.to_vm_thread());
-        CompressedOps::init::<VM>();
         let _result = this.startoff(f);
         _result
     }
@@ -889,7 +888,6 @@ impl<VM: VirtualMachine> Thread<VM> {
     pub fn platform_handle(&self) -> PlatformThreadHandle {
         self.platform_handle.get()
     }
-
 
     pub fn begin_pair_with<'a>(
         &'a self,

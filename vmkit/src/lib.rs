@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::atomic::AtomicBool};
+use std::{marker::PhantomData, sync::atomic::{AtomicBool, AtomicUsize}};
 
 use mm::{aslr::aslr_vm_layout, traits::SlotExtra, MemoryManager};
 use mmtk::{MMTKBuilder, MMTK};
@@ -11,6 +11,7 @@ pub mod options;
 pub mod semaphore;
 pub mod sync;
 pub mod threading;
+pub mod platform;
 
 #[cfg(feature="uncooperative")]
 pub mod bdwgc_shim;
@@ -115,6 +116,7 @@ pub struct VMKit<VM: VirtualMachine> {
     pub mmtk: MMTK<MemoryManager<VM>>,
     pub(crate) collector_started: AtomicBool,
     marker: PhantomData<VM>,
+    gc_disabled_depth: AtomicUsize,
 }
 
 impl<VM: VirtualMachine> VMKit<VM> {
@@ -127,6 +129,7 @@ impl<VM: VirtualMachine> VMKit<VM> {
             marker: PhantomData,
             collector_started: AtomicBool::new(false),
             thread_manager: ThreadManager::new(),
+            gc_disabled_depth: AtomicUsize::new(0),
         }
     }
 

@@ -6,7 +6,6 @@ use crate::{
         metadata::{Metadata, TraceCallback},
         object::VMKitObject,
     },
-    options::OPTIONS,
     threading::{Thread, ThreadContext},
     VirtualMachine,
 };
@@ -101,8 +100,9 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         let tls = Thread::<VM>::from_vm_mutator_thread(mutator.get_tls());
         tls.context.scan_roots(factory.clone());
 
-        if OPTIONS.conservative_stacks {
-            let mut croots = ConservativeRoots::new();
+        #[cfg(not(feature = "full-precise"))]
+        {
+            let mut croots = ConservativeRoots::new(128);
             let bounds = *tls.stack_bounds();
             unsafe { croots.add_span(bounds.origin(), tls.stack_pointer()) };
             tls.context.scan_conservative_roots(&mut croots);

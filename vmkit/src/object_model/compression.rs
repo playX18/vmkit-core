@@ -4,7 +4,7 @@ use std::cell::UnsafeCell;
 
 use mmtk::util::Address;
 
-use crate::{options::OPTIONS, VirtualMachine};
+use crate::VirtualMachine;
 
 use super::object::{VMKitNarrow, VMKitObject};
 
@@ -48,10 +48,16 @@ static COMPRESSED_OPS: CompressedOpsStorage =
     }));
 
 impl CompressedOps {
-    pub(crate) fn init<VM: VirtualMachine>() {
+    /// Initialize compressed object pointers.
+    ///
+    /// # Parameters
+    ///
+    /// - `tagged_pointers`: Forces 16-byte alignment of objects which gives 2 bits for tagging.
+    pub fn init<VM: VirtualMachine>(tagged_pointers: bool) {
         let start = mmtk::memory_manager::starting_heap_address();
         let end = mmtk::memory_manager::last_heap_address();
-        if OPTIONS.tag_compressed_pointers {
+
+        if tagged_pointers {
             let shift = 2;
             let base = start.sub(4096);
 
@@ -64,6 +70,7 @@ impl CompressedOps {
             }
             return;
         }
+
         let shift;
         // Subtract a page because something can get allocated at heap base.
         // This also makes implicit null checking work, because the

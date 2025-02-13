@@ -2,12 +2,12 @@
 //! Address space layout randomization for MMTk.
 
 use mmtk::util::{
-    conversions::raw_align_down, heap::vm_layout::{VMLayout, BYTES_IN_CHUNK}, options::{GCTriggerSelector, Options}, Address
+    conversions::raw_align_down,
+    heap::vm_layout::{VMLayout, BYTES_IN_CHUNK},
+    options::{GCTriggerSelector, Options},
+    Address,
 };
 use rand::Rng;
-
-use crate::options::OPTIONS;
-
 
 fn get_random_mmap_addr() -> Address {
     let mut rng = rand::rng();
@@ -77,7 +77,7 @@ pub fn aslr_vm_layout(mmtk_options: &mut Options) -> VMLayout {
             break;
         }
 
-        
+
     }
 
     if options.compressed_pointers {
@@ -93,6 +93,4 @@ pub fn aslr_vm_layout(mmtk_options: &mut Options) -> VMLayout {
     vm_layout*/
 
     VMLayout::default()
-
-    
 }

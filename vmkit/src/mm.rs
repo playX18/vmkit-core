@@ -10,9 +10,7 @@ use crate::{
 use easy_bitfield::{AtomicBitfieldContainer, ToBitfield};
 use mmtk::{
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
-        metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
-        VMMutatorThread,
+        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator}, conversions::raw_align_up, metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, VMMutatorThread
     },
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
@@ -82,6 +80,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         {
             semantics = AllocationSemantics::Los;
         }
+        size = raw_align_up(size, alignment);
 
         match semantics {
             AllocationSemantics::Los => Self::allocate_los(thread, size, alignment, metadata),
@@ -130,6 +129,8 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             semantics = AllocationSemantics::Los;
         }
 
+        size = raw_align_up(size, alignment);
+
         // all allocator functions other than this actually invoke `flush_tlab` due to the fact
         // that GC can happen inside them.
         match semantics {
@@ -166,8 +167,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
         alignment: usize,
         metadata: VM::Metadata,
     ) -> VMKitObject {
-        debug_assert!(thread.id() == Thread::<VM>::current().id());
-
+       
         unsafe {
             Self::flush_tlab(thread);
             let object_start = mmtk::memory_manager::alloc(
@@ -184,8 +184,9 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 marker: PhantomData,
             });
 
-            Self::set_vo_bit(object);
+            //Self::set_vo_bit(object);
             Self::refill_tlab(thread);
+            mmtk::memory_manager::post_alloc(thread.mutator(), object.as_object_unchecked(), size, AllocationSemantics::Los);
             object
         }
     }
@@ -449,6 +450,19 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             slot.store(target.as_object_unchecked());
         }
         Self::object_reference_write_post(thread, src, slot, target);
+    }
+
+
+    pub fn disable_gc() {
+        VM::get().vmkit().gc_disabled_depth.fetch_add(1, atomic::Ordering::SeqCst);
+    }
+
+    pub fn enable_gc() {
+        VM::get().vmkit().gc_disabled_depth.fetch_sub(1, atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_gc_enabled() -> bool {
+        VM::get().vmkit().gc_disabled_depth.load(atomic::Ordering::SeqCst) == 0
     }
 }
 

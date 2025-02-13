@@ -12,22 +12,33 @@ use mmtk::{
 };
 
 use crate::{
-    object_model::{object::{VMKitNarrow, VMKitObject}, VMKitObjectModel},
-    options::OPTIONS,
+    object_model::{
+        object::{VMKitNarrow, VMKitObject},
+        VMKitObjectModel,
+    },
     VirtualMachine,
 };
 
 use super::conservative_roots::{FatInternalPointer, InternalPointer};
 
+/// Convert `self` into a slot of type `SL`. This type is primarily
+/// used by [`Metadata`](crate::object_model::metadata::Metadata)
+/// in order to have object-vtables e.g Java vtable which on its own is also
+/// an object.
 pub trait ToSlot<SL: Slot> {
     fn to_slot(&self) -> Option<SL>;
 }
 
+/// Indicates that a type can be traced by a garbage collector.
 pub trait Trace {
+    /// Visit each field in its type. Only collector
+    /// is allowed to call this method.
     fn trace_object(&mut self, tracer: &mut dyn ObjectTracer);
 }
 
+/// Indicates that type fields can be enqueued as slots by a garbage collector.
 pub trait Scan<SL: Slot> {
+    /// Scan each field in its type.
     fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>);
 }
 
@@ -53,10 +64,8 @@ impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
                 "VO-bits are not enabled during tracing, can't use internal pointers"
             );
 
-            let start = mmtk::memory_manager::find_object_from_internal_pointer(
-                self.as_address(),
-                OPTIONS.interior_pointer_max_bytes,
-            );
+            let start =
+                mmtk::memory_manager::find_object_from_internal_pointer(self.as_address(), 128);
 
             if let Some(start) = start {
                 let offset = self.as_address() - start.to_raw_address();
@@ -93,7 +102,7 @@ pub trait SlotExtra: Slot {
     fn from_address(address: Address) -> Self;
 
     /// Construct a slot from an `InternalPointer`. VMs are not required to implement
-    /// this as InternalPointer can also be traced. 
+    /// this as InternalPointer can also be traced.
     fn from_internal_pointer<T, VM: VirtualMachine>(pointer: &InternalPointer<T, VM>) -> Self {
         let _ = pointer;
         unimplemented!()
@@ -277,7 +286,6 @@ impl<T, VM: VirtualMachine> Trace for FatInternalPointer<T, VM> {
     }
 }
 
-
 impl Trace for VMKitNarrow {
     fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
         let mut object = self.to_object();
@@ -298,4 +306,3 @@ impl<SL: SlotExtra> ToSlot<SL> for VMKitNarrow {
         Some(SL::from_narrow(self))
     }
 }
-

@@ -28,7 +28,11 @@ pub enum TraceCallback<VM: VirtualMachine> {
 /// Main purpose of this trait is to provide VMKit a way to get GC metadata from the object.
 /// It is also used to convert object references to metadata and vice versa if you store
 /// metadata as an object field.
-pub trait Metadata<VM: VirtualMachine>: ToBitfield<u64> + FromBitfield<u64> + ToSlot<VM::Slot> {
+///
+/// Types which implement `Metadata` must also be convertible to and from bitfields.
+pub trait Metadata<VM: VirtualMachine>:
+    ToBitfield<u64> + FromBitfield<u64> + ToSlot<VM::Slot>
+{
     /// Size of the metadata in bits. Must be `<= 62`.
     const METADATA_BIT_SIZE: usize;
 
@@ -98,7 +102,7 @@ macro_rules! make_uncooperative_metadata {
 impl<VM: VirtualMachine> ToBitfield<u64> for &'static GCMetadata<VM> {
     fn to_bitfield(self) -> u64 {
         let res = self as *const GCMetadata<VM> as usize as u64;
-        res 
+        res
     }
 
     fn one() -> Self {
@@ -112,7 +116,6 @@ impl<VM: VirtualMachine> ToBitfield<u64> for &'static GCMetadata<VM> {
 
 impl<VM: VirtualMachine> FromBitfield<u64> for &'static GCMetadata<VM> {
     fn from_bitfield(value: u64) -> Self {
-        
         unsafe { &*(value as usize as *const GCMetadata<VM>) }
     }
 
@@ -146,4 +149,3 @@ impl<VM: VirtualMachine> ToSlot<VM::Slot> for &'static GCMetadata<VM> {
         None
     }
 }
-

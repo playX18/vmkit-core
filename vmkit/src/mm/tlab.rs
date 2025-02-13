@@ -20,7 +20,6 @@ impl TLAB {
         if result + aligned_size > self.limit {
             return Address::ZERO;
         } else {
-        
             self.cursor = result.add(aligned_size);
             return result;
         }
@@ -35,7 +34,7 @@ impl TLAB {
         self.cursor = Address::ZERO;
         self.limit = Address::ZERO;
     }
-    
+
     pub fn take(&mut self) -> (Address, Address) {
         let cursor = self.cursor;
         let limit = self.limit;

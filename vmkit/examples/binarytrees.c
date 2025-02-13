@@ -34,20 +34,28 @@ Node* bottomUpTree(int depth) {
     return leaf();
 }
 
+extern void* __data_start;
+extern void* _end;
+
+Node* longLivedTree;
+
 int main() {
+    printf("DATA START: %p\n", &__data_start);
+    printf("DATA END: %p\n", &_end);
     GC_use_entire_heap = 1;
     GC_init();
+    
 
-
-    int maxDepth = 21;
+    int maxDepth = 18;
     int stretchDepth = maxDepth + 1;
     int start = clock();
     Node* stretchTree = bottomUpTree(stretchDepth);
     printf("stretch tree of depth %d\n", stretchDepth);
     printf("time: %f\n", ((double)clock() - start) / CLOCKS_PER_SEC);
 
-    Node* longLivedTree = bottomUpTree(maxDepth);
-
+    longLivedTree = bottomUpTree(maxDepth);
+    GC_gcollect();
+    printf("long lived tree of depth %d\t check: %d\n", maxDepth, itemCheck(longLivedTree));
     for (int d = 4; d <= maxDepth; d += 2) {
         int iterations = 1 << (maxDepth - d + 4);
         int check = 0;
