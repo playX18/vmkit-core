@@ -37,6 +37,7 @@ impl ConservativeRoots {
             return;
         };
 
+        println!("found {}", start);
         self.roots.insert(start);
     }
 

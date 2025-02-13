@@ -1,11 +1,15 @@
-use std::fmt;
 use crate::mm::traits::SlotExtra;
 use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};
 use atomic::Atomic;
+use core::ops::Range;
+use std::hash::Hash;
 use mmtk::util::{
     constants::LOG_BYTES_IN_ADDRESS, conversions::raw_align_up, Address, ObjectReference,
 };
+use mmtk::vm::slot::{MemorySlice, SimpleSlot, Slot};
+use std::fmt;
+use std::marker::PhantomData;
 
 use super::{
     compression::CompressedOps,
@@ -152,7 +156,7 @@ impl VMKitObject {
                 align_of::<usize>(),
             ) + overhead
         };
-        
+
         res
     }
 
@@ -604,5 +608,110 @@ impl VMKitNarrow {
 
     pub fn object_start<VM: VirtualMachine>(&self) -> Address {
         self.to_object().object_start::<VM>()
+    }
+}
+
+pub struct SimpleMemorySlice<SL: Slot = SimpleSlot> {
+    range: Range<SL>,
+}
+
+impl<SL: SlotExtra> SimpleMemorySlice<SL> {
+    pub fn from(value: Range<SL>) -> Self {
+        Self { range: value }
+    }
+}
+
+impl<SL: SlotExtra> fmt::Debug for SimpleMemorySlice<SL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SimpleMemorySlice({:?})", self.range)
+    }
+}
+
+impl<SL: SlotExtra> Hash for SimpleMemorySlice<SL> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.range.start.as_address().hash(state);
+        self.range.end.as_address().hash(state);
+    }
+}
+
+impl<SL: SlotExtra> PartialEq for SimpleMemorySlice<SL> {
+    fn eq(&self, other: &Self) -> bool {
+        self.range == other.range
+    }
+}
+
+impl<SL: SlotExtra> Eq for SimpleMemorySlice<SL> {}
+
+impl<SL: SlotExtra> Clone for SimpleMemorySlice<SL> {
+    fn clone(&self) -> Self {
+        Self { range: self.range.clone() }
+    }
+}
+
+
+
+pub struct SimpleMemorySliceRangeIterator<SL: SlotExtra = SimpleSlot> {
+    cursor: Address,
+    end: Address,
+    marker: PhantomData<SL>,
+}
+
+impl<SL: SlotExtra> Iterator for SimpleMemorySliceRangeIterator<SL> {
+    type Item = SL;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor < self.end {
+            let res = self.cursor;
+            self.cursor = self.cursor + size_of::<SL>();
+            Some(SL::from_address(res))
+        } else {
+            None
+        }
+    }
+}
+
+impl<SL: SlotExtra> From<SimpleMemorySlice<SL>> for SimpleMemorySliceRangeIterator<SL> {
+    fn from(value: SimpleMemorySlice<SL>) -> Self {
+        let start = value.range.start.as_address();
+        let end = value.range.end.as_address();
+        Self {
+            cursor: start,
+            end,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<SL: SlotExtra> MemorySlice for SimpleMemorySlice<SL> {
+    type SlotType = SL;
+    type SlotIterator = SimpleMemorySliceRangeIterator<SL>;
+
+    fn iter_slots(&self) -> Self::SlotIterator {
+        SimpleMemorySliceRangeIterator {
+            cursor: self.range.start.as_address(),
+            end: self.range.end.as_address(),
+            marker: PhantomData,
+        }
+    }
+
+    fn object(&self) -> Option<ObjectReference> {
+        None
+    }
+
+    fn start(&self) -> Address {
+        self.range.start.as_address()
+    }
+
+    fn bytes(&self) -> usize {
+        self.range.end.as_address() - self.range.start.as_address()
+    }
+
+    fn copy(src: &Self, tgt: &Self) {
+        unsafe {
+            let bytes = tgt.bytes();
+            let src = src.start().to_ptr::<u8>();
+            let dst = tgt.start().to_mut_ptr::<u8>();
+            std::ptr::copy(src, dst, bytes);
+        }
     }
 }

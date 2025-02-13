@@ -21,7 +21,8 @@ use mmtk::{
     },
     AllocationSemantics, BarrierSelector, MutatorContext,
 };
-use std::marker::PhantomData;
+use ref_glue::Finalizer;
+use std::{marker::PhantomData, panic::AssertUnwindSafe};
 
 #[derive(Clone, Copy)]
 pub struct MemoryManager<VM: VirtualMachine>(PhantomData<VM>);
@@ -486,6 +487,40 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             .gc_disabled_depth
             .load(atomic::Ordering::SeqCst)
             == 0
+    }
+
+    pub fn register_finalizer(object: VMKitObject, callback: Box<dyn FnOnce(VMKitObject) + Send>) {
+        let finalizer = Finalizer {
+            object,
+            callback: Some(callback),
+        };
+        let vm = VM::get();
+        mmtk::memory_manager::add_finalizer(&vm.vmkit().mmtk, finalizer);
+    }
+
+    pub fn run_finalizers() -> usize {
+        let vm = VM::get();
+        let mut count = 0;
+        while let Some(mut finalizer) = mmtk::memory_manager::get_finalized_object(&vm.vmkit().mmtk) {
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| finalizer.run()));
+            count += 1;
+        }
+        count
+    }
+
+    pub fn get_finalizers_for(object: VMKitObject) -> Vec<Finalizer> {
+        if object.is_null() {
+            return vec![];
+        }
+        let vm = VM::get();
+        mmtk::memory_manager::get_finalizers_for(&vm.vmkit().mmtk, unsafe {
+            object.as_object_unchecked()
+        })
+    }
+
+    pub fn get_finalized_object() -> Option<Finalizer> {
+        let vm = VM::get();
+        mmtk::memory_manager::get_finalized_object(&vm.vmkit().mmtk)
     }
 }
 

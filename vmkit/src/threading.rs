@@ -1864,6 +1864,7 @@ extern "C-unwind" fn signal_handler_suspend_resume<VM: VirtualMachine>(
 
         return;
     }
+
     thread
         .stack_pointer
         .store(approximate_stack_pointer.as_usize(), Ordering::Release);

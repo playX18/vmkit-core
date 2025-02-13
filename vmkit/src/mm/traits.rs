@@ -100,6 +100,7 @@ pub trait SlotExtra: Slot {
     /// as internally we use `VMKitObject` to represent all objects.
     fn from_vmkit_object(object: &VMKitObject) -> Self;
     fn from_address(address: Address) -> Self;
+    fn as_address(&self) -> Address;
 
     /// Construct a slot from an `InternalPointer`. VMs are not required to implement
     /// this as InternalPointer can also be traced.
@@ -135,6 +136,10 @@ impl SlotExtra for SimpleSlot {
         let _ = pointer;
         unimplemented!("SimpleSlot does not support internal pointers")
     }
+
+    fn as_address(&self) -> Address {
+        SimpleSlot::as_address(self)
+    }
 }
 
 impl SlotExtra for Address {
@@ -149,6 +154,10 @@ impl SlotExtra for Address {
     fn from_internal_pointer<T, VM: VirtualMachine>(pointer: &InternalPointer<T, VM>) -> Self {
         let _ = pointer;
         unimplemented!("Address does not support internal pointers")
+    }
+
+    fn as_address(&self) -> Address {
+        *self
     }
 }
 

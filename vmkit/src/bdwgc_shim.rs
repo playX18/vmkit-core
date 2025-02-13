@@ -34,7 +34,10 @@ use crate::{
 use easy_bitfield::*;
 use mmtk::{
     util::Address,
-    vm::{slot::SimpleSlot, ObjectTracer},
+    vm::{
+        slot::{SimpleSlot, UnimplementedMemorySlice},
+        ObjectTracer,
+    },
     AllocationSemantics, MMTKBuilder,
 };
 use parking_lot::{Mutex, Once};
@@ -150,6 +153,7 @@ impl VirtualMachine for BDWGC {
     type BlockAdapterList = (GCBlockAdapter, ());
     type Metadata = BDWGCMetadata;
     type Slot = SimpleSlot;
+    type MemorySlice = UnimplementedMemorySlice<Self::Slot>;
 
     fn get() -> &'static Self {
         BDWGC_VM.get().expect("GC is not initialized")
@@ -501,7 +505,16 @@ static INIT: Once = Once::new();
 #[no_mangle]
 pub static mut GC_VERBOSE: i32 = 0;
 
-static BUILDER: LazyLock<Mutex<MMTKBuilder>> = LazyLock::new(|| Mutex::new(MMTKBuilder::new()));
+static BUILDER: LazyLock<Mutex<MMTKBuilder>> = LazyLock::new(|| {
+    Mutex::new({
+        let mut builder = MMTKBuilder::new();
+        builder
+            .options
+            .plan
+            .set(mmtk::util::options::PlanSelector::Immix);
+        builder
+    })
+});
 
 #[no_mangle]
 pub extern "C-unwind" fn GC_get_parallel() -> libc::c_int {
@@ -1135,61 +1148,97 @@ pub extern "C-unwind" fn GC_general_register_disappearing_link(
 #[no_mangle]
 pub extern "C-unwind" fn GC_register_finalizer(
     obj: *mut libc::c_void,
-    finalizer: extern "C" fn(*mut libc::c_void),
+    finalizer: extern "C-unwind" fn(*mut libc::c_void, *mut libc::c_void),
     cd: *mut libc::c_void,
     ofn: *mut extern "C" fn(*mut libc::c_void),
     ocd: *mut *mut libc::c_void,
 ) {
-    let _ = obj; // TBD
-    let _ = finalizer; // TBD
-    let _ = cd; // TBD
-    let _ = ofn; // TBD
-    let _ = ocd; // TBD
+    let object = GC_base(obj);
+    if object.is_null() {
+        return;
+    }
+    let _ = ofn;
+    let _ = ocd;
+    let cd = Address::from_mut_ptr(cd);
+    let object = VMKitObject::from_address(Address::from_mut_ptr(object));
+    MemoryManager::<BDWGC>::register_finalizer(
+        object,
+        Box::new(move |object| {
+            finalizer(object.as_address().to_mut_ptr(), cd.to_mut_ptr());
+        }),
+    );
 }
 
 #[no_mangle]
 pub extern "C-unwind" fn GC_register_finalizer_ignore_self(
     obj: *mut libc::c_void,
-    finalizer: extern "C" fn(*mut libc::c_void),
+    finalizer: extern "C" fn(*mut libc::c_void, *mut libc::c_void),
     cd: *mut libc::c_void,
     ofn: *mut extern "C" fn(*mut libc::c_void),
     ocd: *mut *mut libc::c_void,
 ) {
-    let _ = obj; // TBD
-    let _ = finalizer; // TBD
-    let _ = cd; // TBD
-    let _ = ofn; // TBD
-    let _ = ocd; // TBD
+    let object = GC_base(obj);
+    if object.is_null() {
+        return;
+    }
+    let _ = ofn;
+    let _ = ocd;
+    let cd = Address::from_mut_ptr(cd);
+    let object = VMKitObject::from_address(Address::from_mut_ptr(object));
+    MemoryManager::<BDWGC>::register_finalizer(
+        object,
+        Box::new(move |object| {
+            finalizer(object.as_address().to_mut_ptr(), cd.to_mut_ptr());
+        }),
+    );
 }
 
 #[no_mangle]
 pub extern "C-unwind" fn GC_register_finalizer_no_order(
     obj: *mut libc::c_void,
-    finalizer: extern "C" fn(*mut libc::c_void),
+    finalizer: extern "C" fn(*mut libc::c_void, *mut libc::c_void),
     cd: *mut libc::c_void,
     ofn: *mut extern "C" fn(*mut libc::c_void),
     ocd: *mut *mut libc::c_void,
 ) {
-    let _ = obj; // TBD
-    let _ = finalizer; // TBD
-    let _ = cd; // TBD
-    let _ = ofn; // TBD
-    let _ = ocd; // TBD
+    let object = GC_base(obj);
+    if object.is_null() {
+        return;
+    }
+    let _ = ofn;
+    let _ = ocd;
+    let cd = Address::from_mut_ptr(cd);
+    let object = VMKitObject::from_address(Address::from_mut_ptr(object));
+    MemoryManager::<BDWGC>::register_finalizer(
+        object,
+        Box::new(move |object| {
+            finalizer(object.as_address().to_mut_ptr(), cd.to_mut_ptr());
+        }),
+    );
 }
 
 #[no_mangle]
 pub extern "C-unwind" fn GC_register_finalizer_unreachable(
     obj: *mut libc::c_void,
-    finalizer: extern "C" fn(*mut libc::c_void),
+    finalizer: extern "C" fn(*mut libc::c_void, *mut libc::c_void),
     cd: *mut libc::c_void,
     ofn: *mut extern "C" fn(*mut libc::c_void),
     ocd: *mut *mut libc::c_void,
 ) {
-    let _ = obj; // TBD
-    let _ = finalizer; // TBD
-    let _ = cd; // TBD
-    let _ = ofn; // TBD
-    let _ = ocd; // TBD
+    let object = GC_base(obj);
+    if object.is_null() {
+        return;
+    }
+    let _ = ofn;
+    let _ = ocd;
+    let cd = Address::from_mut_ptr(cd);
+    let object = VMKitObject::from_address(Address::from_mut_ptr(object));
+    MemoryManager::<BDWGC>::register_finalizer(
+        object,
+        Box::new(move |object| {
+            finalizer(object.as_address().to_mut_ptr(), cd.to_mut_ptr());
+        }),
+    );
 }
 
 #[no_mangle]
@@ -1440,4 +1489,9 @@ pub unsafe extern "C-unwind" fn GC_malloc_explicitly_typed_ignore_off_page(
 ) -> *mut libc::c_void {
     let _ = descr;
     GC_malloc_ignore_off_page(size)
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_invoke_finalizers() -> usize {
+    MemoryManager::<BDWGC>::run_finalizers()
 }

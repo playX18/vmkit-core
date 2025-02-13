@@ -1,4 +1,5 @@
 use mmtk::util::Address;
+use mmtk::vm::slot::UnimplementedMemorySlice;
 use mmtk::{util::options::PlanSelector, vm::slot::SimpleSlot, AllocationSemantics, MMTKBuilder};
 use std::cell::RefCell;
 use std::mem::offset_of;
@@ -65,6 +66,7 @@ impl VirtualMachine for BenchVM {
     type Metadata = &'static GCMetadata<Self>;
     type Slot = SimpleSlot;
     type ThreadContext = ThreadBenchContext;
+    type MemorySlice = UnimplementedMemorySlice;
     fn get() -> &'static Self {
         VM.get().unwrap()
     }

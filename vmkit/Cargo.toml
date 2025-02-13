@@ -26,7 +26,7 @@ sysinfo = "0.33.1"
 
 default = ["uncooperative"]
 
-uncooperative = ["cooperative", "mmtk/immix_non_moving"]
+uncooperative = ["cooperative", "mmtk/immix_non_moving", "mmtk/immix_zero_on_release"]
 
 # VMKit is built for use in cooperative runtime. Such runtime
 # would be able to use write barriers and safepoints. Such environment

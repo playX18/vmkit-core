@@ -4,8 +4,9 @@ use std::{
 };
 
 use mm::{aslr::aslr_vm_layout, traits::SlotExtra, MemoryManager};
-use mmtk::{MMTKBuilder, MMTK};
-use threading::{initialize_threading, ThreadManager};
+use mmtk::{vm::slot::MemorySlice, MMTKBuilder, MMTK};
+use object_model::object::VMKitObject;
+use threading::{initialize_threading, Thread, ThreadManager};
 
 pub mod machine_context;
 pub mod mm;
@@ -24,7 +25,7 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type BlockAdapterList: threading::BlockAdapterList<Self>;
     type Metadata: object_model::metadata::Metadata<Self>;
     type Slot: SlotExtra;
-
+    type MemorySlice: MemorySlice<SlotType = Self::Slot>;
     const ALIGNMENT_VALUE: u32 = 0xdead_beef;
     const MAX_ALIGNMENT: usize = 32;
     const MIN_ALIGNMENT: usize = 8;
@@ -112,6 +113,38 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
         let _ = err_kind;
         eprintln!("Out of memory: {:?}", err_kind);
         std::process::exit(1);
+    }
+
+    /// Weak and soft references always clear the referent before enqueueing.
+    fn clear_referent(new_reference: VMKitObject) {
+        let _ = new_reference;
+        unimplemented!()
+    }
+
+    /// Get the referent from a weak reference object.
+    fn get_referent(object: VMKitObject) -> VMKitObject {
+        let _ = object;
+        unimplemented!()
+    }
+
+    /// Set the referent in a weak reference object.
+    fn set_referent(reff: VMKitObject, referent: VMKitObject) {
+        let _ = reff;
+        let _ = referent;
+        unimplemented!()
+    }
+
+    /// For weak reference types, if the referent is cleared during GC, the reference
+    /// will be added to a queue, and MMTk will call this method to inform
+    /// the VM about the changes for those references. This method is used
+    /// to implement Java's ReferenceQueue.
+    /// Note that this method is called for each type of weak references during GC, and
+    /// the references slice will be cleared after this call is returned. That means
+    /// MMTk will no longer keep these references alive once this method is returned.
+    fn enqueue_references(references: impl Iterator<Item = VMKitObject>, tls: &Thread<Self>) {
+        let _ = references;
+        let _ = tls;
+        unimplemented!()
     }
 }
 
