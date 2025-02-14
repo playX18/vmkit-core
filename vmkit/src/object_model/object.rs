@@ -3,12 +3,12 @@ use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};
 use atomic::Atomic;
 use core::ops::Range;
-use std::hash::Hash;
 use mmtk::util::{
     constants::LOG_BYTES_IN_ADDRESS, conversions::raw_align_up, Address, ObjectReference,
 };
 use mmtk::vm::slot::{MemorySlice, SimpleSlot, Slot};
 use std::fmt;
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use super::{
@@ -127,8 +127,18 @@ impl VMKitObject {
     /// # Returns
     ///
     /// * `usize` - The alignment of the object.
-    pub fn alignment<VM: VirtualMachine>(&self) -> usize {
-        self.header::<VM>().metadata().gc_metadata().alignment
+    pub fn alignment<VM: VirtualMachine>(self) -> usize {
+        let alignment = self.header::<VM>().metadata().gc_metadata().alignment;
+        if alignment == 0 {
+            return self
+                .header::<VM>()
+                .metadata()
+                .gc_metadata()
+                .compute_alignment
+                .map(|f| f(self))
+                .unwrap_or(VM::MAX_ALIGNMENT);
+        }
+        alignment
     }
 
     /// Returns the number of bytes used by the `VMKitObject`.
@@ -644,11 +654,11 @@ impl<SL: SlotExtra> Eq for SimpleMemorySlice<SL> {}
 
 impl<SL: SlotExtra> Clone for SimpleMemorySlice<SL> {
     fn clone(&self) -> Self {
-        Self { range: self.range.clone() }
+        Self {
+            range: self.range.clone(),
+        }
     }
 }
-
-
 
 pub struct SimpleMemorySliceRangeIterator<SL: SlotExtra = SimpleSlot> {
     cursor: Address,

@@ -33,7 +33,7 @@ use crate::{
 };
 use easy_bitfield::*;
 use mmtk::{
-    util::Address,
+    util::{options::PlanSelector, Address},
     vm::{
         slot::{SimpleSlot, UnimplementedMemorySlice},
         ObjectTracer,
@@ -326,6 +326,7 @@ struct MarkStackMeta<'a> {
 static CONSERVATIVE_METADATA: GCMetadata<BDWGC> = GCMetadata {
     alignment: 8,
     instance_size: 0,
+    compute_alignment: None,
     compute_size: Some(|object| {
         let header = object.header::<BDWGC>().metadata();
         ObjectSize::decode(header.meta) * BDWGC::MIN_ALIGNMENT
@@ -508,10 +509,10 @@ pub static mut GC_VERBOSE: i32 = 0;
 static BUILDER: LazyLock<Mutex<MMTKBuilder>> = LazyLock::new(|| {
     Mutex::new({
         let mut builder = MMTKBuilder::new();
-        builder
-            .options
-            .plan
-            .set(mmtk::util::options::PlanSelector::Immix);
+        builder.options.read_env_var_settings();
+        if !matches!(*builder.options.plan, PlanSelector::Immix | PlanSelector::MarkSweep) {
+            builder.options.plan.set(PlanSelector::Immix);
+        }
         builder
     })
 });

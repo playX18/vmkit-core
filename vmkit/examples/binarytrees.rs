@@ -32,6 +32,7 @@ static METADATA: GCMetadata<BenchVM> = GCMetadata {
     instance_size: size_of::<Node>(),
     compute_size: None,
     alignment: 16,
+    compute_alignment: None,
 };
 
 struct BenchVM {

@@ -14,6 +14,7 @@ pub struct GCMetadata<VM: VirtualMachine> {
     pub instance_size: usize,
     pub compute_size: Option<fn(VMKitObject) -> usize>,
     pub alignment: usize,
+    pub compute_alignment: Option<fn(VMKitObject) -> usize>,
 }
 
 #[derive(Debug)]
