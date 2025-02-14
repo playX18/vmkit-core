@@ -24,6 +24,7 @@ use crate::{
         MemoryManager,
     },
     object_model::{
+        finalization::FinalizerProcessing,
         metadata::{GCMetadata, Metadata, TraceCallback},
         object::VMKitObject,
     },
@@ -186,7 +187,7 @@ impl VirtualMachine for BDWGC {
             }
         });
 
-        false
+        FinalizerProcessing::process::<BDWGC>(_worker, _tracer_context)
     }
 
     fn forward_weak_refs(
@@ -510,7 +511,10 @@ static BUILDER: LazyLock<Mutex<MMTKBuilder>> = LazyLock::new(|| {
     Mutex::new({
         let mut builder = MMTKBuilder::new();
         builder.options.read_env_var_settings();
-        if !matches!(*builder.options.plan, PlanSelector::Immix | PlanSelector::MarkSweep) {
+        if !matches!(
+            *builder.options.plan,
+            PlanSelector::Immix | PlanSelector::MarkSweep
+        ) {
             builder.options.plan.set(PlanSelector::Immix);
         }
         builder

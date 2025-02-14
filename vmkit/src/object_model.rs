@@ -12,6 +12,7 @@ use object::{MoveTarget, VMKitObject};
 pub mod header;
 pub mod metadata;
 pub mod object;
+pub mod finalization;
 pub mod compression;
 
 pub struct VMKitObjectModel<VM: VirtualMachine>(PhantomData<VM>);
