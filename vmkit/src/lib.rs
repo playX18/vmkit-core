@@ -20,6 +20,8 @@ pub mod threading;
 #[cfg(feature = "uncooperative")]
 pub mod bdwgc_shim;
 
+pub use mmtk;
+
 pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type ThreadContext: threading::ThreadContext<Self>;
     type BlockAdapterList: threading::BlockAdapterList<Self>;
@@ -27,6 +29,8 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Slot: SlotExtra;
     type MemorySlice: MemorySlice<SlotType = Self::Slot>;
 
+    /*#[cfg(feature = "address_based_hashing")]
+    const HASH_STATE_SPEC: VMLocalHashStateSpec = VMLocalHashStateSpec::in_header(61);*/
     /// 1-word local metadata for spaces that may copy objects.
     /// This metadata has to be stored in the header.
     /// This metadata can be defined at a position within the object payload.

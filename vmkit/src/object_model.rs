@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::{mm::MemoryManager, VirtualMachine};
 use header::{HashState, HASHCODE_OFFSET, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
 use mmtk::{
-    util::{alloc::fill_alignment_gap, constants::LOG_BYTES_IN_ADDRESS, ObjectReference},
+    util::{alloc::fill_alignment_gap, constants::LOG_BYTES_IN_ADDRESS, metadata::MetadataSpec, ObjectReference},
     vm::*,
 };
 use object::{MoveTarget, VMKitObject};
@@ -159,7 +159,7 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
 }
 impl<VM: VirtualMachine> VMKitObjectModel<VM> {
     fn move_object(from_obj: VMKitObject, mut to: MoveTarget, num_bytes: usize) -> VMKitObject {
-        log::trace!(
+        log::debug!(
             "move_object: from_obj: {}, to: {}, bytes={}",
             from_obj.as_address(),
             to,
@@ -209,7 +209,9 @@ impl<VM: VirtualMachine> VMKitObjectModel<VM> {
         // Update hash state if necessary
         if hash_state == HashState::Hashed {
             unsafe {
+               
                 let hash_code = from_obj.as_address().as_usize() >> LOG_BYTES_IN_ADDRESS;
+                
                 to_obj
                     .as_address()
                     .offset(HASHCODE_OFFSET)
@@ -224,4 +226,16 @@ impl<VM: VirtualMachine> VMKitObjectModel<VM> {
 
         to_obj
     }
+
+    pub const fn last_side_metadata_spec() -> &'static MetadataSpec {
+        #[cfg(feature="object_pinning")]
+        {
+            Self::LOCAL_PINNING_BIT_SPEC.as_spec()
+        }
+        #[cfg(not(feature="object_pinning"))]
+        {
+            Self::LOCAL_LOS_MARK_NURSERY_SPEC.as_spec()
+        }
+    }
 }
+

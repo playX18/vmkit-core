@@ -14,7 +14,7 @@ use mmtk::{
     MutatorContext,
 };
 
-use super::{conservative_roots::ConservativeRoots, traits::ToSlot};
+use super::traits::ToSlot;
 
 pub struct VMKitScanning<VM: VirtualMachine>(PhantomData<VM>);
 
@@ -95,13 +95,15 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
     fn scan_roots_in_mutator_thread(
         _tls: mmtk::util::VMWorkerThread,
         mutator: &'static mut mmtk::Mutator<MemoryManager<VM>>,
-        mut factory: impl mmtk::vm::RootsWorkFactory<VM::Slot>,
+        factory: impl mmtk::vm::RootsWorkFactory<VM::Slot>,
     ) {
         let tls = Thread::<VM>::from_vm_mutator_thread(mutator.get_tls());
         tls.context.scan_roots(factory.clone());
 
         #[cfg(not(feature = "full-precise"))]
         {
+            let mut factory = factory;
+            use super::conservative_roots::ConservativeRoots;
             let mut croots = ConservativeRoots::new(128);
             let bounds = *tls.stack_bounds();
             unsafe { croots.add_span(bounds.origin(), tls.stack_pointer()) };
@@ -124,6 +126,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
     ) -> bool {
         let object = VMKitObject::from(object);
         let metadata = object.header::<VM>().metadata();
+     
         matches!(metadata.gc_metadata().trace, TraceCallback::ScanSlots(_))
             && (!metadata.is_object() || metadata.to_slot().is_some())
     }

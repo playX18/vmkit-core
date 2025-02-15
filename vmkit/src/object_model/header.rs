@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::VirtualMachine;
+use crate::{define_vm_metadata_spec, VirtualMachine};
 use easy_bitfield::*;
 
 use super::object::ADDRESS_BASED_HASHING;
@@ -13,13 +13,14 @@ pub const HASHCODE_OFFSET: isize = -(OBJECT_REF_OFFSET + size_of::<usize>() as i
 
 
 pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING {
-    61
+    60
 } else {
     63
 };
 
 pub type MetadataField = BitField<u64, usize, 0, METADATA_BIT_LIMIT, false>;
 pub type HashStateField = BitField<u64, HashState, { MetadataField::NEXT_BIT }, 2, false>;
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashState {
@@ -97,7 +98,5 @@ impl<VM: VirtualMachine> HeapObjectHeader<VM> {
     pub fn set_metadata(&self, metadata: VM::Metadata) {
         self.metadata.update_synchronized::<MetadataField>(metadata.to_bitfield() as _);
     }
-    
-    
-    
+
 }

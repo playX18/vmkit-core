@@ -126,7 +126,7 @@ impl NodeRef {
             &METADATA,
             AllocationSemantics::Default,
         );
-
+        //node.hashcode::<BenchVM>();
         node.set_field_object::<BenchVM, false>(offset_of!(Node, left), left.0);
         node.set_field_object::<BenchVM, false>(offset_of!(Node, right), right.0);
 
@@ -188,15 +188,8 @@ fn main() {
         .parse::<usize>()
         .unwrap();
     let mut builder = MMTKBuilder::new();
-    builder.options.plan.set(PlanSelector::Immix);
+    builder.options.plan.set(PlanSelector::StickyImmix);
     builder.options.threads.set(nthreads);
-    builder
-        .options
-        .gc_trigger
-        .set(mmtk::util::options::GCTriggerSelector::DynamicHeapSize(
-            4 * 1024 * 1024 * 1024,
-            16 * 1024 * 1024 * 1024,
-        ));
     VM.set(BenchVM {
         vmkit: VMKit::new(&mut builder),
     })

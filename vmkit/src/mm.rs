@@ -57,6 +57,7 @@ pub mod scanning;
 pub mod stack_bounds;
 pub mod tlab;
 pub mod traits;
+pub mod spec;
 
 impl<VM: VirtualMachine> MemoryManager<VM> {
     pub extern "C-unwind" fn request_gc() -> bool {
@@ -100,10 +101,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 let object_start =
                     mmtk::memory_manager::alloc(thread.mutator(), size, alignment, 0, semantics);
 
-                object_start.store(HeapObjectHeader::<VM> {
-                    metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                    marker: PhantomData,
-                });
+                object_start.store(HeapObjectHeader::<VM>::new(metadata));
                 let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
                 Self::set_vo_bit(object);
                 Self::refill_tlab(thread);
@@ -146,10 +144,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                         tlab.allocate::<VM>(size, alignment, OBJECT_REF_OFFSET as usize);
 
                     if !object_start.is_zero() {
-                        object_start.store(HeapObjectHeader::<VM> {
-                            metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                            marker: PhantomData,
-                        });
+                        object_start.store(HeapObjectHeader::<VM>::new(metadata));
                         let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
                         Self::set_vo_bit(object);
                         return object;
@@ -185,10 +180,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             );
 
             let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
-            object_start.store(HeapObjectHeader::<VM> {
-                metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                marker: PhantomData,
-            });
+            object_start.store(HeapObjectHeader::<VM>::new(metadata));
 
             //Self::set_vo_bit(object);
             Self::refill_tlab(thread);
@@ -222,10 +214,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             );
 
             let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
-            object_start.store(HeapObjectHeader::<VM> {
-                metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                marker: PhantomData,
-            });
+            object_start.store(HeapObjectHeader::<VM>::new(metadata));
             Self::set_vo_bit(object);
             Self::refill_tlab(thread);
             object
@@ -252,10 +241,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             );
 
             let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
-            object_start.store(HeapObjectHeader::<VM> {
-                metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                marker: PhantomData,
-            });
+            object_start.store(HeapObjectHeader::<VM>::new(metadata));
             Self::set_vo_bit(object);
             Self::refill_tlab(thread);
             object
@@ -283,10 +269,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                 semantics,
             );
 
-            object_start.store(HeapObjectHeader::<VM> {
-                metadata: AtomicBitfieldContainer::new(metadata.to_bitfield()),
-                marker: PhantomData,
-            });
+            object_start.store(HeapObjectHeader::<VM>::new(metadata));
             let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
             Self::set_vo_bit(object);
             Self::refill_tlab(thread);
