@@ -26,6 +26,14 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Metadata: object_model::metadata::Metadata<Self>;
     type Slot: SlotExtra;
     type MemorySlice: MemorySlice<SlotType = Self::Slot>;
+
+
+    #[cfg(feature="vmside_forwarding")]
+    const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec;
+    #[cfg(feature="vmside_forwarding")]
+    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec;
+
+
     const ALIGNMENT_VALUE: u32 = 0xdead_beef;
     const MAX_ALIGNMENT: usize = 32;
     const MIN_ALIGNMENT: usize = 8;
@@ -145,6 +153,18 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
         let _ = references;
         let _ = tls;
         unimplemented!()
+    }
+
+    /// Compute the hashcode of an object. When feature `address_based_hashing` is enabled,
+    /// this function is ignored. Otherwise VMKit calls into this function to compute hashcode of an object.
+    /// 
+    /// In case VM uses moving plans it's strongly advised to *not* compute hashcode based on address
+    /// as the object's address may change during GC, instead store hashcode as a field or use some bits
+    /// in header to store the hashcode. This function must be fast as it's called for each `VMKitObject::hashcode()` 
+    /// invocation.
+    fn compute_hashcode(object: VMKitObject) -> usize {
+        let _ = object;
+        unimplemented!("VM currently does not support hashcode computation, override this method to do so");
     }
 }
 

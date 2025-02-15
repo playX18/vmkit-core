@@ -46,9 +46,13 @@ impl ConservativeRoots {
     ///
     /// `start` and `end` must be valid addresses.
     pub unsafe fn add_span(&mut self, mut start: Address, mut end: Address) {
+        assert!(!start.is_zero() && !end.is_zero(), "provided NULL address to ConservativeRoots::add_span");
+        
         if start > end {
             std::mem::swap(&mut start, &mut end);
         }
+        let start = start.align_down(size_of::<Address>());
+        let end = end.align_up(size_of::<Address>());
         let mut current = start;
         while current < end {
             let addr = current.load::<Address>();

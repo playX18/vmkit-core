@@ -19,6 +19,13 @@ use super::{
     metadata::Metadata,
 };
 
+/// Is address based hash enabled? If true
+/// then object header uses 2 bits to indicate hash state and if GC moves
+/// the object, object hash is stored in the object itself. 
+/// 
+/// When disabled, `hashcode()` instead calls into VM to get the hashcode.
+pub const ADDRESS_BASED_HASHING: bool = cfg!(feature="address_based_hashing");
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VMKitObject(Address);
@@ -208,6 +215,9 @@ impl VMKitObject {
     /// * `usize` - The hashcode overhead.
     #[inline(always)]
     pub fn hashcode_overhead<VM: VirtualMachine, const WHEN_COPIED: bool>(&self) -> usize {
+        if !ADDRESS_BASED_HASHING {
+            return 0;
+        }
         let hash_state = self.header::<VM>().hash_state();
 
         let has_hashcode = if WHEN_COPIED {
@@ -267,7 +277,10 @@ impl VMKitObject {
         self.bytes_required_when_copied::<VM>()
     }
 
-    pub fn hashcode<VM: VirtualMachine>(&self) -> usize {
+    pub fn hashcode<VM: VirtualMachine>(self) -> usize {
+        if !ADDRESS_BASED_HASHING {
+            return VM::compute_hashcode(self);
+        }
         let header = self.header::<VM>();
         match header.hash_state() {
             HashState::HashedAndMoved => {

@@ -365,6 +365,9 @@ impl<VM: VirtualMachine> Thread<VM> {
             self.tid.store(libc::gettid() as _, Ordering::Relaxed);
         }
         init_current_thread(self.clone());
+        self.stack_bounds
+            .set(StackBounds::current_thread_stack_bounds())
+            .unwrap();
         let constraints = VM::get().vmkit().mmtk.get_plan().constraints();
         self.max_non_los_default_alloc_bytes
             .set(constraints.max_non_los_default_alloc_bytes);
@@ -386,9 +389,6 @@ impl<VM: VirtualMachine> Thread<VM> {
             _ => self.alloc_fastpath.set(AllocFastPath::None),
         }
 
-        self.stack_bounds
-            .set(StackBounds::current_thread_stack_bounds())
-            .unwrap();
         let vmkit = VM::get().vmkit();
         if !self.is_collector_thread() && !self.ignore_handshakes_and_gc() {
             let mutator = mmtk::memory_manager::bind_mutator(
@@ -930,7 +930,7 @@ impl<VM: VirtualMachine> Thread<VM> {
 
     pub fn enter_native() {
         let t = Self::current();
-
+        t.stack_pointer.store(current_stack_pointer().as_usize(), Ordering::Relaxed);
         let mut old_state;
         loop {
             old_state = t.get_exec_status();
@@ -1197,7 +1197,7 @@ impl<VM: VirtualMachine> Thread<VM> {
         let thread = Thread::<VM>::current();
         let _was_at_yieldpoint = thread.at_yieldpoint.load(atomic::Ordering::Relaxed);
         thread.at_yieldpoint.store(true, atomic::Ordering::Relaxed);
-
+       
         // If thread is in critical section we can't do anything right now, defer
         // until later
         // we do this without acquiring locks, since part of the point of disabling
@@ -1447,7 +1447,7 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
             // Deal with terminating threads to ensure that all threads are either dead to MMTk or stopped above.
             self.process_about_to_terminate();
 
-            self.inner
+            let threads = self.inner
                 .lock_no_handshake()
                 .borrow()
                 .threads
@@ -1455,7 +1455,17 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
                 .flatten()
                 .filter(|t| t.is_blocked_for::<GCBlockAdapter>())
                 .cloned()
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+
+            #[cfg(debug_assertions)]
+            {
+                for thread in threads.iter() {
+                    assert!(!thread.stack_bounds().is_empty());
+                    assert!(!thread.stack_pointer().is_zero());
+                }
+            }
+
+            threads 
         } else {
             self.process_about_to_terminate();
             let mut handshake_threads = Vec::with_capacity(4);

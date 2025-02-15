@@ -3,13 +3,22 @@ use std::marker::PhantomData;
 use crate::VirtualMachine;
 use easy_bitfield::*;
 
+use super::object::ADDRESS_BASED_HASHING;
+
 /// Offset from allocation pointer to the actual object start.
 pub const OBJECT_REF_OFFSET: isize = 8;
 /// Object header behind object.
 pub const OBJECT_HEADER_OFFSET: isize = -OBJECT_REF_OFFSET;
 pub const HASHCODE_OFFSET: isize = -(OBJECT_REF_OFFSET + size_of::<usize>() as isize);
 
-pub type MetadataField = BitField<u64, usize, 0, 58, false>;
+
+pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING {
+    61
+} else {
+    63
+};
+
+pub type MetadataField = BitField<u64, usize, 0, METADATA_BIT_LIMIT, false>;
 pub type HashStateField = BitField<u64, HashState, { MetadataField::NEXT_BIT }, 2, false>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +80,9 @@ impl<VM: VirtualMachine> HeapObjectHeader<VM> {
     }
 
     pub fn hash_state(&self) -> HashState {
+        if !ADDRESS_BASED_HASHING {
+            return HashState::Unhashed;
+        }
         self.metadata.read::<HashStateField>()
     }
 

@@ -1,22 +1,22 @@
 use std::marker::PhantomData;
 
 use crate::{mm::MemoryManager, VirtualMachine};
-use easy_bitfield::BitFieldTrait;
-use header::{HashState, HashStateField, HASHCODE_OFFSET, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
+use header::{HashState, HASHCODE_OFFSET, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
 use mmtk::{
     util::{alloc::fill_alignment_gap, constants::LOG_BYTES_IN_ADDRESS, ObjectReference},
     vm::*,
 };
 use object::{MoveTarget, VMKitObject};
 
+pub mod compression;
+pub mod finalization;
 pub mod header;
 pub mod metadata;
 pub mod object;
-pub mod finalization;
-pub mod compression;
 
 pub struct VMKitObjectModel<VM: VirtualMachine>(PhantomData<VM>);
 
+/*
 pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
 pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
     VMLocalForwardingPointerSpec::in_header(0);
@@ -24,15 +24,47 @@ pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
     VMLocalForwardingBitsSpec::in_header(HashStateField::NEXT_BIT as _);
 pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
 pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec =
-    VMLocalLOSMarkNurserySpec::in_header(HashStateField::NEXT_BIT as _);
+    VMLocalLOSMarkNurserySpec::in_header(HashStateField::NEXT_BIT as _);*/
+
+pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
+/// Overwrite first field of the object header
+pub const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
+    VMLocalForwardingPointerSpec::in_header(OBJECT_REF_OFFSET);
+
 impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM> {
-    const GLOBAL_LOG_BIT_SPEC: mmtk::vm::VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
+    /*const GLOBAL_LOG_BIT_SPEC: mmtk::vm::VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
     const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec =
         FORWARDING_POINTER_METADATA_SPEC;
     const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec =
         FORWARDING_BITS_METADATA_SPEC;
     const LOCAL_MARK_BIT_SPEC: mmtk::vm::VMLocalMarkBitSpec = MARKING_METADATA_SPEC;
-    const LOCAL_LOS_MARK_NURSERY_SPEC: mmtk::vm::VMLocalLOSMarkNurserySpec = LOS_METADATA_SPEC;
+    const LOCAL_LOS_MARK_NURSERY_SPEC: mmtk::vm::VMLocalLOSMarkNurserySpec = LOS_METADATA_SPEC;*/
+
+    const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
+
+    #[cfg(not(feature = "vmside_forwarding"))]
+    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec =
+        VMLocalForwardingBitsSpec::side_first();
+    #[cfg(not(feature = "vmside_forwarding"))]
+    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
+        VMLocalForwardingPointerSpec::in_header(0);
+
+    #[cfg(feature = "vmside_forwarding")]
+    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec = VM::LOCAL_FORWARDING_BITS_SPEC;
+    #[cfg(feature = "vmside_forwarding")]
+    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
+        VM::LOCAL_FORWARDING_POINTER_SPEC;
+    const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec =
+        if Self::LOCAL_FORWARDING_BITS_SPEC.as_spec().is_on_side() {
+            VMLocalMarkBitSpec::side_after(&Self::LOCAL_FORWARDING_BITS_SPEC.as_spec())
+        } else {
+            VMLocalMarkBitSpec::side_first()
+        };
+
+    const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec =
+        VMLocalLOSMarkNurserySpec::side_after(&Self::LOCAL_MARK_BIT_SPEC.as_spec());
+    const LOCAL_PINNING_BIT_SPEC: VMLocalPinningBitSpec =
+        VMLocalPinningBitSpec::side_after(&Self::LOCAL_LOS_MARK_NURSERY_SPEC.as_spec());
 
     const OBJECT_REF_OFFSET_LOWER_BOUND: isize = OBJECT_REF_OFFSET;
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = false;
@@ -68,13 +100,13 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
         region: mmtk::util::Address,
     ) -> mmtk::util::Address {
         let vmkit_from = VMKitObject::from(from);
-    
+
         let copy = from != to;
         let bytes = if copy {
             let vmkit_to = VMKitObject::from(to);
             let bytes = vmkit_to.bytes_required_when_copied::<VM>();
             Self::move_object(vmkit_from, MoveTarget::ToObject(vmkit_to), bytes);
-            bytes 
+            bytes
         } else {
             vmkit_from.bytes_used::<VM>()
         };
@@ -92,11 +124,8 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
         let res_addr = to + OBJECT_REF_OFFSET + vmkit_from.hashcode_overhead::<VM, true>();
         debug_assert!(!res_addr.is_zero());
         // SAFETY: we just checked that the address is not zero
-        unsafe {
-            ObjectReference::from_raw_address_unchecked(res_addr)
-        }
+        unsafe { ObjectReference::from_raw_address_unchecked(res_addr) }
     }
-
 
     fn get_type_descriptor(_reference: mmtk::util::ObjectReference) -> &'static [i8] {
         unreachable!()
@@ -118,7 +147,6 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
         VMKitObject::from_objref_nullable(Some(object)).get_size_when_copied::<VM>()
     }
 
-
     fn ref_to_object_start(reference: mmtk::util::ObjectReference) -> mmtk::util::Address {
         VMKitObject::from_objref_nullable(Some(reference)).object_start::<VM>()
     }
@@ -133,7 +161,12 @@ impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM>
 }
 impl<VM: VirtualMachine> VMKitObjectModel<VM> {
     fn move_object(from_obj: VMKitObject, mut to: MoveTarget, num_bytes: usize) -> VMKitObject {
-        log::trace!("move_object: from_obj: {}, to: {}, bytes={}", from_obj.as_address(), to, num_bytes);
+        log::trace!(
+            "move_object: from_obj: {}, to: {}, bytes={}",
+            from_obj.as_address(),
+            to,
+            num_bytes
+        );
         let mut copy_bytes = num_bytes;
         let mut obj_ref_offset = OBJECT_REF_OFFSET;
         let hash_state = from_obj.header::<VM>().hash_state();
@@ -141,7 +174,6 @@ impl<VM: VirtualMachine> VMKitObjectModel<VM> {
         // Adjust copy bytes and object reference offset based on hash state
         match hash_state {
             HashState::Hashed => {
-                
                 copy_bytes -= size_of::<usize>(); // Exclude hash code from copy
                 if let MoveTarget::ToAddress(ref mut addr) = to {
                     *addr += size_of::<usize>(); // Adjust address for hash code
