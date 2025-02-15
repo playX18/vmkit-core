@@ -29,6 +29,11 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Slot: SlotExtra;
     type MemorySlice: MemorySlice<SlotType = Self::Slot>;
 
+
+    /// Should we always trace objects? If `true` then `support_slot_enqueing` will always return 
+    /// false to MMTk and we will always work through `ObjectTracer` to trace objects.
+    const ALWAYS_TRACE: bool = false;
+
     /*#[cfg(feature = "address_based_hashing")]
     const HASH_STATE_SPEC: VMLocalHashStateSpec = VMLocalHashStateSpec::in_header(61);*/
     /// 1-word local metadata for spaces that may copy objects.

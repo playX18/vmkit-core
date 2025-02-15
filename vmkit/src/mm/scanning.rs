@@ -124,6 +124,9 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         _tls: mmtk::util::VMWorkerThread,
         object: mmtk::util::ObjectReference,
     ) -> bool {
+        if VM::ALWAYS_TRACE {
+            return true;
+        }
         let object = VMKitObject::from(object);
         let metadata = object.header::<VM>().metadata();
      
