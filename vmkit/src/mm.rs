@@ -7,7 +7,6 @@ use crate::{
     threading::Thread,
     VirtualMachine,
 };
-use easy_bitfield::{AtomicBitfieldContainer, ToBitfield};
 use mmtk::{
     util::{
         alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
