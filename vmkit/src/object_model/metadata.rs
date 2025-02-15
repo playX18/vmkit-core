@@ -32,7 +32,7 @@ pub enum TraceCallback<VM: VirtualMachine> {
 ///
 /// Types which implement `Metadata` must also be convertible to and from bitfields.
 pub trait Metadata<VM: VirtualMachine>:
-    ToBitfield<u64> + FromBitfield<u64> + ToSlot<VM::Slot>
+    ToBitfield<usize> + FromBitfield<usize> + ToSlot<VM::Slot>
 {
     /// Size of the metadata in bits. Must be `<= 62`.
     const METADATA_BIT_SIZE: usize;
@@ -82,16 +82,16 @@ macro_rules! make_uncooperative_metadata {
                 unreachable!()
             }
         }
-        impl<VM: $crate::VirtualMachine> $crate::object_model::metadata::ToBitfield<u64> for $name {
-            fn to_bitfield(self) -> u64 {
-                self.wsize as u64
+        impl<VM: $crate::VirtualMachine> $crate::object_model::metadata::ToBitfield<usize> for $name {
+            fn to_bitfield(self) -> usize {
+                self.wsize as usize
             }
         }
 
-        impl<VM: $crate::VirtualMachine> $crate::object_model::metadata::FromBitfield<u64>
+        impl<VM: $crate::VirtualMachine> $crate::object_model::metadata::FromBitfield<usize>
             for $name
         {
-            fn from_bitfield(value: u64) -> Self {
+            fn from_bitfield(value: usize) -> Self {
                 Self {
                     wsize: value as usize,
                 }
@@ -100,9 +100,9 @@ macro_rules! make_uncooperative_metadata {
     };
 }
 
-impl<VM: VirtualMachine> ToBitfield<u64> for &'static GCMetadata<VM> {
-    fn to_bitfield(self) -> u64 {
-        let res = self as *const GCMetadata<VM> as usize as u64;
+impl<VM: VirtualMachine> ToBitfield<usize> for &'static GCMetadata<VM> {
+    fn to_bitfield(self) -> usize {
+        let res = self as *const GCMetadata<VM> as usize as usize;
         res
     }
 
@@ -115,8 +115,8 @@ impl<VM: VirtualMachine> ToBitfield<u64> for &'static GCMetadata<VM> {
     }
 }
 
-impl<VM: VirtualMachine> FromBitfield<u64> for &'static GCMetadata<VM> {
-    fn from_bitfield(value: u64) -> Self {
+impl<VM: VirtualMachine> FromBitfield<usize> for &'static GCMetadata<VM> {
+    fn from_bitfield(value: usize) -> Self {
         unsafe { &*(value as usize as *const GCMetadata<VM>) }
     }
 

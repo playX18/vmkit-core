@@ -11,10 +11,10 @@ pub const OBJECT_REF_OFFSET: isize = 8;
 pub const OBJECT_HEADER_OFFSET: isize = -OBJECT_REF_OFFSET;
 pub const HASHCODE_OFFSET: isize = -(OBJECT_REF_OFFSET + size_of::<usize>() as isize);
 
-pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING { 60 } else { 63 };
+pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING { usize::BITS as usize - 2 } else { usize::BITS as usize };
 
-pub type MetadataField = BitField<u64, usize, 0, METADATA_BIT_LIMIT, false>;
-pub type HashStateField = BitField<u64, HashState, { MetadataField::NEXT_BIT }, 2, false>;
+pub type MetadataField = BitField<usize, usize, 0, METADATA_BIT_LIMIT, false>;
+pub type HashStateField = BitField<usize, HashState, { MetadataField::NEXT_BIT }, 2, false>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashState {
@@ -23,8 +23,8 @@ pub enum HashState {
     HashedAndMoved,
 }
 
-impl FromBitfield<u64> for HashState {
-    fn from_bitfield(value: u64) -> Self {
+impl FromBitfield<usize> for HashState {
+    fn from_bitfield(value: usize) -> Self {
         match value {
             0 => Self::Unhashed,
             1 => Self::Hashed,
@@ -43,8 +43,8 @@ impl FromBitfield<u64> for HashState {
     }
 }
 
-impl ToBitfield<u64> for HashState {
-    fn to_bitfield(self) -> u64 {
+impl ToBitfield<usize> for HashState {
+    fn to_bitfield(self) -> usize {
         match self {
             Self::Unhashed => 0,
             Self::Hashed => 1,
@@ -62,7 +62,7 @@ impl ToBitfield<u64> for HashState {
 }
 
 pub struct HeapObjectHeader<VM: VirtualMachine> {
-    pub metadata: AtomicBitfieldContainer<u64>,
+    pub metadata: AtomicBitfieldContainer<usize>,
     pub marker: PhantomData<VM>,
 }
 

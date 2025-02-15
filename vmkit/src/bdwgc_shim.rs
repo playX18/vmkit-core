@@ -462,21 +462,21 @@ static CONSERVATIVE_METADATA: GCMetadata<BDWGC> = GCMetadata {
     }),
 };
 
-impl FromBitfield<u64> for BDWGCMetadata {
-    fn from_bitfield(value: u64) -> Self {
+impl FromBitfield<usize> for BDWGCMetadata {
+    fn from_bitfield(value: usize) -> Self {
         Self {
             meta: value as usize,
         }
     }
 
     fn from_i64(value: i64) -> Self {
-        Self::from_bitfield(value as u64)
+        Self::from_bitfield(value as usize)
     }
 }
 
-impl ToBitfield<u64> for BDWGCMetadata {
-    fn to_bitfield(self) -> u64 {
-        self.meta as u64
+impl ToBitfield<usize> for BDWGCMetadata {
+    fn to_bitfield(self) -> usize {
+        self.meta as usize
     }
 
     fn one() -> Self {
