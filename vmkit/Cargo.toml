@@ -32,7 +32,7 @@ uncooperative = ["cooperative", "mmtk/immix_non_moving", "mmtk/immix_zero_on_rel
 # VMKit is built for use in cooperative runtime. Such runtime
 # would be able to use write barriers and safepoints. Such environment
 # must also provide precise object layout (stack can be uncooperative).
-cooperative = ["mmtk/vo_bit", "mmtk/is_mmtk_object", "mmtk/vo_bit_access", "mmtk/immix_non_moving"]
+cooperative = ["object_pinning", "mmtk/vo_bit", "mmtk/is_mmtk_object", "mmtk/vo_bit_access", "mmtk/immix_non_moving"]
 # VMKit is built for use in full-precise runtime. Such runtime
 # would be able to use precise write barriers and safepoints, object
 # layout is fully precise.

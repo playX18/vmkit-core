@@ -27,12 +27,19 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
     type Slot: SlotExtra;
     type MemorySlice: MemorySlice<SlotType = Self::Slot>;
 
-
-    #[cfg(feature="vmside_forwarding")]
+    /// 1-word local metadata for spaces that may copy objects.
+    /// This metadata has to be stored in the header.
+    /// This metadata can be defined at a position within the object payload.
+    /// As a forwarding pointer is only stored in dead objects which is not
+    /// accessible by the language, it is okay that store a forwarding pointer overwrites object payload
+    ///
+    #[cfg(feature = "vmside_forwarding")]
     const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec;
-    #[cfg(feature="vmside_forwarding")]
+    /// 2-bit local metadata for spaces that store a forwarding state for objects.
+    /// If this spec is defined in the header, it can be defined with a position of the lowest 2 bits in the forwarding pointer.
+    /// If this spec is defined on the side it must be defined after the [`MARK_BIT_SPEC`](crate::object_model::MARK_BIT_SPEC).
+    #[cfg(feature = "vmside_forwarding")]
     const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec;
-
 
     const ALIGNMENT_VALUE: u32 = 0xdead_beef;
     const MAX_ALIGNMENT: usize = 32;
@@ -157,14 +164,16 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
 
     /// Compute the hashcode of an object. When feature `address_based_hashing` is enabled,
     /// this function is ignored. Otherwise VMKit calls into this function to compute hashcode of an object.
-    /// 
+    ///
     /// In case VM uses moving plans it's strongly advised to *not* compute hashcode based on address
     /// as the object's address may change during GC, instead store hashcode as a field or use some bits
-    /// in header to store the hashcode. This function must be fast as it's called for each `VMKitObject::hashcode()` 
+    /// in header to store the hashcode. This function must be fast as it's called for each `VMKitObject::hashcode()`
     /// invocation.
     fn compute_hashcode(object: VMKitObject) -> usize {
         let _ = object;
-        unimplemented!("VM currently does not support hashcode computation, override this method to do so");
+        unimplemented!(
+            "VM currently does not support hashcode computation, override this method to do so"
+        );
     }
 }
 

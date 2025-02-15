@@ -72,7 +72,7 @@ impl VirtualMachine for BenchVM {
     #[cfg(feature="vmside_forwarding")]
     const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec = mmtk::vm::VMLocalForwardingPointerSpec::in_header(0);
     #[cfg(feature="vmside_forwarding")]
-    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec = mmtk::vm::VMLocalForwardingBitsSpec::side_first();
+    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec = mmtk::vm::VMLocalForwardingBitsSpec::in_header(62);
 
     fn get() -> &'static Self {
         VM.get().unwrap()

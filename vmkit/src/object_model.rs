@@ -16,55 +16,53 @@ pub mod object;
 
 pub struct VMKitObjectModel<VM: VirtualMachine>(PhantomData<VM>);
 
-/*
-pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
-pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
-    VMLocalForwardingPointerSpec::in_header(0);
-pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
-    VMLocalForwardingBitsSpec::in_header(HashStateField::NEXT_BIT as _);
-pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
-pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec =
-    VMLocalLOSMarkNurserySpec::in_header(HashStateField::NEXT_BIT as _);*/
 
-pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
-/// Overwrite first field of the object header
-pub const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
-    VMLocalForwardingPointerSpec::in_header(OBJECT_REF_OFFSET);
-
+/// 1-bit local metadata for spaces that need to mark an object.
+/// 
+/// Always defined on the side in VMKit.
+pub const MARK_BIT_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
 impl<VM: VirtualMachine> ObjectModel<MemoryManager<VM>> for VMKitObjectModel<VM> {
-    /*const GLOBAL_LOG_BIT_SPEC: mmtk::vm::VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
-    const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec =
-        FORWARDING_POINTER_METADATA_SPEC;
-    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec =
-        FORWARDING_BITS_METADATA_SPEC;
-    const LOCAL_MARK_BIT_SPEC: mmtk::vm::VMLocalMarkBitSpec = MARKING_METADATA_SPEC;
-    const LOCAL_LOS_MARK_NURSERY_SPEC: mmtk::vm::VMLocalLOSMarkNurserySpec = LOS_METADATA_SPEC;*/
 
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
 
-    #[cfg(not(feature = "vmside_forwarding"))]
-    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec =
-        VMLocalForwardingBitsSpec::side_first();
-    #[cfg(not(feature = "vmside_forwarding"))]
-    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
-        VMLocalForwardingPointerSpec::in_header(0);
+    const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec = MARK_BIT_SPEC;
+    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec = {
+        #[cfg(feature = "vmside_forwarding")]
+        {
+            VM::LOCAL_FORWARDING_BITS_SPEC
+        }
+        #[cfg(not(feature = "vmside_forwarding"))]
+        {
+            VMLocalForwardingBitsSpec::side_after(&MARK_BIT_SPEC.as_spec())
+        }
+    };
 
-    #[cfg(feature = "vmside_forwarding")]
-    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec = VM::LOCAL_FORWARDING_BITS_SPEC;
-    #[cfg(feature = "vmside_forwarding")]
-    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
-        VM::LOCAL_FORWARDING_POINTER_SPEC;
-    const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec =
-        if Self::LOCAL_FORWARDING_BITS_SPEC.as_spec().is_on_side() {
-            VMLocalMarkBitSpec::side_after(&Self::LOCAL_FORWARDING_BITS_SPEC.as_spec())
+    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec = {
+        #[cfg(feature = "vmside_forwarding")]
+        {
+            VM::LOCAL_FORWARDING_POINTER_SPEC
+        }
+        #[cfg(not(feature = "vmside_forwarding"))]
+        {
+            VMLocalForwardingPointerSpec::in_header(0)
+        }
+    };
+
+    const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec = {
+        let spec_after = if Self::LOCAL_FORWARDING_BITS_SPEC.as_spec().is_in_header() {
+            Self::LOCAL_MARK_BIT_SPEC.as_spec()
         } else {
-            VMLocalMarkBitSpec::side_first()
+            Self::LOCAL_FORWARDING_BITS_SPEC.as_spec()
         };
+        VMLocalLOSMarkNurserySpec::side_after(&spec_after)
+    };
 
-    const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec =
-        VMLocalLOSMarkNurserySpec::side_after(&Self::LOCAL_MARK_BIT_SPEC.as_spec());
-    const LOCAL_PINNING_BIT_SPEC: VMLocalPinningBitSpec =
-        VMLocalPinningBitSpec::side_after(&Self::LOCAL_LOS_MARK_NURSERY_SPEC.as_spec());
+    #[cfg(feature="object_pinning")]
+    const LOCAL_PINNING_BIT_SPEC: VMLocalPinningBitSpec = {
+        VMLocalPinningBitSpec::side_after(&Self::LOCAL_LOS_MARK_NURSERY_SPEC.as_spec())
+    };
+    
+
 
     const OBJECT_REF_OFFSET_LOWER_BOUND: isize = OBJECT_REF_OFFSET;
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = false;
