@@ -7,7 +7,7 @@ edition = "2021"
 proc-macro2 = "1.0.93"
 quote = "1.0.38"
 syn = { version = "2.0.98", features = ["full"] }
-
+synstructure = { version = "0.13.1" }
 
 [lib]
 proc-macro = true 

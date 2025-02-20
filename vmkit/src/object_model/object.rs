@@ -3,6 +3,8 @@ use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};
 use atomic::Atomic;
 use core::ops::Range;
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 use mmtk::util::{
     constants::LOG_BYTES_IN_ADDRESS, conversions::raw_align_up, Address, ObjectReference,
 };
@@ -738,3 +740,103 @@ impl<SL: SlotExtra> MemorySlice for SimpleMemorySlice<SL> {
         }
     }
 }
+
+pub struct GcPtr<T> {
+    ptr: NonNull<T>,
+}
+
+impl<T> GcPtr<T> {
+    pub fn new(ptr: NonNull<T>) -> Self {
+        Self { ptr }
+    }
+
+    pub fn as_ptr(&self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+
+    pub fn as_ref(&self) -> &T {
+        unsafe { self.ptr.as_ref() }
+    }
+
+    pub fn as_mut(&mut self) -> &mut T {
+        unsafe { self.ptr.as_mut() }
+    }
+
+    pub fn as_address(&self) -> Address {
+        Address::from_mut_ptr(self.ptr.as_ptr())
+    }
+
+    pub fn from_address(address: Address) -> Self {
+        assert!(!address.is_zero());
+        Self {
+            ptr: NonNull::new(address.to_mut_ptr()).unwrap(),
+        }
+    }
+
+    pub fn from_ptr(ptr: *mut T) -> Self {
+        assert!(!ptr.is_null());
+        Self {
+            ptr: NonNull::new(ptr).unwrap(),
+        }
+    }
+}
+
+impl<T> GcPtr<MaybeUninit<T>> {
+    pub unsafe fn assume_init(self) -> GcPtr<T> {
+        GcPtr::new(self.ptr.cast())
+    }
+}
+
+impl<T> std::ops::Deref for GcPtr<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<T> std::ops::DerefMut for GcPtr<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for GcPtr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", **self)
+    }
+}
+
+impl<T: Hash> Hash for GcPtr<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state);
+    }
+}
+
+impl<T: PartialEq> PartialEq for GcPtr<T> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl<T: Eq> Eq for GcPtr<T> {}
+
+impl<T: PartialOrd> PartialOrd for GcPtr<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+}
+
+impl<T: Ord> Ord for GcPtr<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<T> Clone for GcPtr<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.ptr)
+    }
+}
+
+impl<T> Copy for GcPtr<T> {}

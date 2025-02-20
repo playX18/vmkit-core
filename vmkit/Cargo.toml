@@ -17,14 +17,15 @@ mmtk = { git = "https://github.com/mmtk/mmtk-core" }
 parking_lot = "0.12.3"
 rand = "0.9.0"
 sysinfo = "0.33.1"
-
+vmkit-proc = { path = "../vmkit-proc", optional = true }
 
 
 
 [features]
 
-default = ["cooperative", "address_based_hashing", "object_pinning"]
+default = ["cooperative", "address_based_hashing", "object_pinning", "derive"]
 vmside_forwarding = []
+derive = ["vmkit-proc"]
 object_pinning = ["mmtk/object_pinning"]
 address_based_hashing = []
 uncooperative = ["cooperative", "mmtk/immix_non_moving", "mmtk/immix_zero_on_release"]

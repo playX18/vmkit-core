@@ -216,3 +216,15 @@ impl<VM: VirtualMachine> VMKit<VM> {
         &self.thread_manager
     }
 }
+
+#[cfg(feature="derive")]
+pub use vmkit_proc::GCMetadata;
+
+pub mod prelude {
+    pub use super::GCMetadata;
+    pub use super::mm::traits::*;
+    pub use super::object_model::object::*;
+    pub use super::object_model::metadata::*;
+    pub use mmtk::vm::ObjectTracer;
+    pub use mmtk::vm::SlotVisitor;
+}
