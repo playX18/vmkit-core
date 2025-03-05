@@ -47,6 +47,10 @@ static COMPRESSED_OPS: CompressedOpsStorage =
         range: (Address::ZERO, Address::ZERO),
     }));
 
+
+pub const MY_RANDOM_ADDR: usize = 0x500_000_000 + 6 * 1024 * 1024 * 1024;
+pub const COMPRESSED: usize = (MY_RANDOM_ADDR - 0x500_000_000) >> 3;
+
 impl CompressedOps {
     /// Initialize compressed object pointers.
     ///

@@ -13,10 +13,9 @@ pub mod mm;
 pub mod object_model;
 pub mod options;
 pub mod platform;
-pub mod semaphore;
 pub mod sync;
 pub mod threading;
-
+pub mod macros;
 #[cfg(feature = "uncooperative")]
 pub mod bdwgc_shim;
 
@@ -219,8 +218,8 @@ impl<VM: VirtualMachine> VMKit<VM> {
 
 #[cfg(feature="derive")]
 pub use vmkit_proc::GCMetadata;
-
 pub mod prelude {
+    #[cfg(feature="derive")]
     pub use super::GCMetadata;
     pub use super::mm::traits::*;
     pub use super::object_model::object::*;

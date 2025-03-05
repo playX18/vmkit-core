@@ -1,17 +1,13 @@
 use std::marker::PhantomData;
 
 use crate::{
-    mm::MemoryManager,
-    object_model::{
+    machine_context::PlatformRegisters, mm::MemoryManager, object_model::{
         metadata::{Metadata, TraceCallback},
         object::VMKitObject,
-    },
-    threading::{Thread, ThreadContext},
-    VirtualMachine,
+    }, threading::{Thread, ThreadContext}, VirtualMachine
 };
 use mmtk::{
-    vm::{slot::Slot, ObjectTracer, Scanning, SlotVisitor},
-    MutatorContext,
+    util::Address, vm::{slot::Slot, ObjectTracer, Scanning, SlotVisitor}, MutatorContext
 };
 
 use super::traits::ToSlot;
@@ -106,9 +102,17 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
             use super::conservative_roots::ConservativeRoots;
             let mut croots = ConservativeRoots::new(128);
             let bounds = *tls.stack_bounds();
+            let registers = tls.get_registers();
+
+            unsafe {
+                let start = Address::from_ref(&registers);
+                let end = start.add(size_of::<PlatformRegisters>());
+                croots.add_span(start, end);
+            }
             unsafe { croots.add_span(bounds.origin(), tls.stack_pointer()) };
             tls.context.scan_conservative_roots(&mut croots);
             croots.add_to_factory(&mut factory);
+            drop(registers);
         }
     }
 

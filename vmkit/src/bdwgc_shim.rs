@@ -253,6 +253,10 @@ impl VirtualMachine for BDWGC {
             }
         }
     }
+
+    fn compute_hashcode(object: VMKitObject) -> usize {
+        object.as_address().as_usize()
+    }
 }
 
 type VTableAddress = BitField<usize, usize, 0, 37, false>;
@@ -603,6 +607,11 @@ pub extern "C-unwind" fn GC_register_my_thread(_stack_base: *mut GC_stack_base) 
 #[no_mangle]
 pub extern "C-unwind" fn GC_unregister_my_thread() {
     unsafe { Thread::<BDWGC>::unregister_mutator_manual() };
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn GC_allow_register_threads() {
+    /* noop: always allowed */
 }
 
 #[no_mangle]

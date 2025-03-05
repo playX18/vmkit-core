@@ -2,12 +2,9 @@
 
 extern crate proc_macro;
 
-use std::collections::HashSet;
-
-use proc_macro::TokenStream;
-use proc_macro2::{extra, Span};
+use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, Arm, Data, DeriveInput};
+use std::collections::HashSet;
 use synstructure::{decl_derive, AddBounds};
 
 struct ArrayLike {
@@ -15,6 +12,7 @@ struct ArrayLike {
     /// Getter for length field.
     pub length_getter: Option<syn::Expr>,
     /// Setter for length field.
+    #[allow(dead_code)]
     pub length_setter: Option<syn::Expr>,
     pub element_type: syn::Type,
     pub data_field: Option<syn::Ident>,
@@ -155,6 +153,7 @@ fn find_arraylike(attrs: &[syn::Attribute]) -> syn::Result<Option<ArrayLike>> {
 enum ObjectAlignment {
     Auto,
     Const(syn::Expr),
+    #[allow(dead_code)]
     Compute(syn::Expr),
 }
 
@@ -331,7 +330,7 @@ pub fn derive_gcmetadata(input: TokenStream) -> TokenStream {
 
 decl_derive!([GCMetadata,attributes(gcmetadata, arraylike, ignore_trace)] => derive_gcmetadata);
 
-fn derive_gcmetadata(mut s: synstructure::Structure<'_>) -> proc_macro2::TokenStream {
+fn derive_gcmetadata(s: synstructure::Structure<'_>) -> proc_macro2::TokenStream {
     let gc_metadata = match find_gcmetadata(&s.ast().attrs) {
         Ok(gc) => gc,
         Err(err) => return err.to_compile_error(),
@@ -372,7 +371,6 @@ fn derive_gcmetadata(mut s: synstructure::Structure<'_>) -> proc_macro2::TokenSt
 
             let trace_impl = if scan_slots {
                 let trace_body = filtered.each(|bi| {
-                    
                     quote! {
                         mark(#bi, visitor);
                     }
@@ -484,40 +482,48 @@ fn derive_gcmetadata(mut s: synstructure::Structure<'_>) -> proc_macro2::TokenSt
                 )
             };
 
-            (Some(trace_impl), if scan_slots {
-                let full_path = quote! { <#vm as vmkit::VirtualMachine>::Slot };
-                quote! { ::vmkit::prelude::TraceCallback::ScanSlots(|object, visitor| unsafe {
-                    let object = object.as_address().as_ref::<#name>();
-                    ::vmkit::prelude::Scan::<#full_path>::scan_object(object, visitor);
-                }) }
-            } else {
-                quote! { ::vmkit::prelude::TraceCallback::TraceObject(|object, visitor| unsafe {
-                    let object = object.as_address().as_mut_ref::<#name>();
-                    ::vmkit::prelude::Trace::trace_object(object, visitor);
-                }) }
-            })
+            (
+                Some(trace_impl),
+                if scan_slots {
+                    let full_path = quote! { <#vm as vmkit::VirtualMachine>::Slot };
+                    quote! { ::vmkit::prelude::TraceCallback::ScanSlots(|object, visitor| unsafe {
+                        let object = object.as_address().as_ref::<#name>();
+                        ::vmkit::prelude::Scan::<#full_path>::scan_object(object, visitor);
+                    }) }
+                } else {
+                    quote! { ::vmkit::prelude::TraceCallback::TraceObject(|object, visitor| unsafe {
+                        let object = object.as_address().as_mut_ref::<#name>();
+                        ::vmkit::prelude::Trace::trace_object(object, visitor);
+                    }) }
+                },
+            )
         }
 
         ObjectTrace::Trace(scan_slots, expr) => {
             if scan_slots {
-                (None, quote! {
-                    ::vmkit::prelude::TraceCallback::ScanSlots(|object, visitor| unsafe {
-                        let this = object.as_address().as_ref::<#name>();
-                        #expr
-                    })
-                })
+                (
+                    None,
+                    quote! {
+                        ::vmkit::prelude::TraceCallback::ScanSlots(|object, visitor| unsafe {
+                            let this = object.as_address().as_ref::<#name>();
+                            #expr
+                        })
+                    },
+                )
             } else {
-                (None, quote! {
-                    ::vmkit::prelude::TraceCallback::TraceObject(|object, visitor| unsafe {
-                        let this = object.as_address().as_mut_ref::<#name>();
-                        #expr
-                    })
-                })
+                (
+                    None,
+                    quote! {
+                        ::vmkit::prelude::TraceCallback::TraceObject(|object, visitor| unsafe {
+                            let this = object.as_address().as_mut_ref::<#name>();
+                            #expr
+                        })
+                    },
+                )
             }
         }
-        ,
     };
-    
+
     let instance_size = match &gc_metadata.size {
         ObjectSize::Auto if arraylike.is_some() => quote! { 0 },
         ObjectSize::Size(_) if arraylike.is_some() => quote! { 0 },
@@ -547,12 +553,11 @@ fn derive_gcmetadata(mut s: synstructure::Structure<'_>) -> proc_macro2::TokenSt
                     panic!("length field not found");
                 };
 
-               
                 let element = &arraylike.element_type;
                 quote! { Some(|object| unsafe {
                     let this = object.as_address().as_ref::<#name>();
                     let length = #length;
-                    
+
 
                     size_of::<#name>() + (length * ::std::mem::size_of::<#element>())
                 }) }
@@ -589,3 +594,5 @@ fn derive_gcmetadata(mut s: synstructure::Structure<'_>) -> proc_macro2::TokenSt
 
     output.into()
 }
+
+mod bytecode;

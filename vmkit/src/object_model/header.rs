@@ -11,7 +11,7 @@ pub const OBJECT_REF_OFFSET: isize = 8;
 pub const OBJECT_HEADER_OFFSET: isize = -OBJECT_REF_OFFSET;
 pub const HASHCODE_OFFSET: isize = -(OBJECT_REF_OFFSET + size_of::<usize>() as isize);
 
-pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING { usize::BITS as usize - 2 } else { usize::BITS as usize };
+pub const METADATA_BIT_LIMIT: usize = if ADDRESS_BASED_HASHING { usize::BITS as usize - 2 } else { usize::BITS as usize - 1 };
 
 pub type MetadataField = BitField<usize, usize, 0, METADATA_BIT_LIMIT, false>;
 pub type HashStateField = BitField<usize, HashState, { MetadataField::NEXT_BIT }, 2, false>;

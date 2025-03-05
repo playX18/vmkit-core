@@ -1,7 +1,6 @@
 use mmtk::util::Address;
 use mmtk::vm::slot::UnimplementedMemorySlice;
 use mmtk::{util::options::PlanSelector, vm::slot::SimpleSlot, AllocationSemantics, MMTKBuilder};
-use vmkit::GCMetadata;
 use std::cell::RefCell;
 use std::mem::offset_of;
 use std::sync::Arc;
@@ -182,16 +181,7 @@ fn bottom_up_tree(thread: &Thread<BenchVM>, depth: usize) -> NodeRef {
 
 const MIN_DEPTH: usize = 4;
 
-#[derive(GCMetadata)]
-#[gcmetadata(
-    vm = BenchVM,
-    scan
-)]
-enum Object {
-    
-    Fixnum(#[ignore_trace] i32),
-    Boxed(VMKitObject)
-}
+
 
 
 
@@ -210,7 +200,7 @@ fn main() {
     .unwrap_or_else(|_| panic!());
 
     Thread::<BenchVM>::main(ThreadBenchContext, || {
-        let thread = Thread::<BenchVM>::current();
+        /*let thread = Thread::<BenchVM>::current();
         let start = std::time::Instant::now();
         let n = std::env::var("DEPTH")
             .unwrap_or("18".to_string())
@@ -271,6 +261,17 @@ fn main() {
         );
 
         let duration = start.elapsed();
-        println!("time: {duration:?}");
+        println!("time: {duration:?}");*/
+
+
+        let thread = Thread::<BenchVM>::current();
+
+        thread.save_registers();
+
+        let registers = thread.get_registers();
+
+        for (i, greg) in registers.machine_context.gregs.iter().enumerate() {
+            println!("{:02}: {:x}",i, greg);
+        }
     });
 }

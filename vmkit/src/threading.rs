@@ -18,14 +18,14 @@ use mmtk::{
 use parking_lot::Once;
 
 use crate::{
+    machine_context::PlatformRegisters,
     mm::{
         conservative_roots::ConservativeRoots,
         stack_bounds::{current_stack_pointer, StackBounds},
         tlab::TLAB,
         AllocFastPath, MemoryManager,
     },
-    semaphore::Semaphore,
-    sync::{Monitor, MonitorGuard},
+    sync::{semaphore::Semaphore, Monitor, MonitorGuard},
     VirtualMachine,
 };
 
@@ -195,6 +195,7 @@ pub struct Thread<VM: VirtualMachine> {
     should_block_for_gc: AtomicBool,
 
     stack_pointer: Atomic<usize>,
+    platform_registers: UnsafeCell<MaybeUninit<PlatformRegisters>>,
     suspend_count: AtomicUsize,
     /// The monitor of the thread. Protects access to the thread's state.
     monitor: Monitor<()>,
@@ -264,6 +265,7 @@ impl<VM: VirtualMachine> Thread<VM> {
             should_block_for_gc: AtomicBool::new(false),
             monitor: Monitor::new(()),
             communication_lock: Monitor::new(()),
+            platform_registers: UnsafeCell::new(MaybeUninit::zeroed()),
         })
     }
 
@@ -445,6 +447,7 @@ impl<VM: VirtualMachine> Thread<VM> {
         self.add_about_to_terminate();
     }
 
+    /// Start a main thread.
     pub fn main<F, R>(context: VM::ThreadContext, f: F) -> Option<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -739,6 +742,40 @@ impl<VM: VirtualMachine> Thread<VM> {
         self.check_block_no_save_context();
     }
 
+    /// Save the thread's registers.
+    pub fn save_registers(&self) {
+        assert_eq!(
+            self.platform_handle(),
+            Self::current().platform_handle(),
+            "attempt to save registers of another thread"
+        );
+        let sp = current_stack_pointer();
+        self.stack_pointer.store(sp.as_usize(), Ordering::Relaxed);
+        unsafe {
+            cfgenius::cond! {
+                if macro(crate::macros::have_machine_context) {
+                    let mut ucontext = MaybeUninit::<libc::ucontext_t>::uninit();
+                    libc::getcontext(ucontext.as_mut_ptr());
+                    let registers = crate::machine_context::registers_from_ucontext(ucontext.as_ptr()).read();
+                    self.platform_registers.get().write(MaybeUninit::new(registers));
+                } else {
+                   self.platform_registers.get().write(MaybeUninit::new(crate::machine_context::PlatformRegisters {
+                        stack_pointer: sp.as_usize() as _
+                   }));
+
+                }
+            }
+        }
+    }
+
+    /// Get the thread's registers.
+    ///
+    /// NOTE: Does not guarantee valid registers
+    /// nor that the returned value is the currently active registers.
+    pub fn get_registers(&self) -> PlatformRegisters {
+        unsafe { self.platform_registers.get().read().assume_init() }
+    }
+
     /// Return this thread's stack pointer.
     ///
     /// Note: Does not guarantee that the returned value is currently active stack pointer.
@@ -928,9 +965,15 @@ impl<VM: VirtualMachine> Thread<VM> {
         A::is_blocked(self)
     }
 
+    /// Change thread state to `InNative` and store the current stack pointer.
+    ///
+    /// This method will mark this thread as blocked for thread system and GC can run
+    /// concurrently with this thread. Note that native code *must* not access GC heap
+    /// as it can lead to undefined behavior.
     pub fn enter_native() {
         let t = Self::current();
-        t.stack_pointer.store(current_stack_pointer().as_usize(), Ordering::Relaxed);
+        t.stack_pointer
+            .store(current_stack_pointer().as_usize(), Ordering::Relaxed);
         let mut old_state;
         loop {
             old_state = t.get_exec_status();
@@ -947,6 +990,10 @@ impl<VM: VirtualMachine> Thread<VM> {
         }
     }
 
+    /// Attempt to leave native state and return to managed state without blocking.
+    ///
+    /// If this method returns `false` you should call [`leave_native`](Self::leave_native) to block the thread or
+    /// spin wait untilt this method returns `true`.
     #[must_use = "If thread can't leave native state without blocking, call [leave_native](Thread::leave_native) instead"]
     pub fn attempt_leave_native_no_block() -> bool {
         let t = Self::current();
@@ -966,12 +1013,16 @@ impl<VM: VirtualMachine> Thread<VM> {
         }
     }
 
+    /// Leave native state and return to managed state.
+    ///
+    /// This method might block the thread if any block requestes are pending.
     pub fn leave_native() {
         if !Self::attempt_leave_native_no_block() {
             Self::current().leave_native_blocked();
         }
     }
 
+    /// Unblock the thread and notify all waiting threads.
     pub fn unblock<A: BlockAdapter<VM>>(&self) {
         let lock = self.monitor.lock_no_handshake();
         A::clear_block_request(self);
@@ -980,10 +1031,12 @@ impl<VM: VirtualMachine> Thread<VM> {
         drop(lock);
     }
 
+    /// Are yieldpoints enabled for this thread?
     pub fn yieldpoints_enabled(&self) -> bool {
         self.yieldpoints_enabled_count.load(Ordering::Relaxed) == 1
     }
 
+    /// Enable yieldpoints for this thread.
     pub fn enable_yieldpoints(&self) {
         let val = self
             .yieldpoints_enabled_count
@@ -997,6 +1050,7 @@ impl<VM: VirtualMachine> Thread<VM> {
         }
     }
 
+    /// Disable yieldpoints for this thread.
     pub fn disable_yieldpoints(&self) {
         self.yieldpoints_enabled_count
             .fetch_sub(1, Ordering::Relaxed);
@@ -1197,7 +1251,7 @@ impl<VM: VirtualMachine> Thread<VM> {
         let thread = Thread::<VM>::current();
         let _was_at_yieldpoint = thread.at_yieldpoint.load(atomic::Ordering::Relaxed);
         thread.at_yieldpoint.store(true, atomic::Ordering::Relaxed);
-       
+
         // If thread is in critical section we can't do anything right now, defer
         // until later
         // we do this without acquiring locks, since part of the point of disabling
@@ -1275,6 +1329,18 @@ pub(crate) fn deinit_current_thread<VM: VirtualMachine>() {
     })
 }
 
+/// Thread management system. This type is responsible
+/// for registering and managing all threads in the system. When GC
+/// requests a thread to block, it will go through this type.
+///
+/// Threads are suspended in two ways:
+/// - 1) Yieldpoints are requested: this assumes that runtime is cooperative
+/// and does periodically invoke check [`take_yieldpoint`](Thread::take_yieldpoint) to be non-zero and then
+/// calls into [`Thread::yieldpoint`].
+/// - 2) Signals: this is used when runtime is uncooperative and runs without yieldpoints. We deliver
+/// UNIX signals or Windows exceptions to suspend the thread. This method is less precise and does not
+/// account for all locks held in the mutators, so it is less safe. It is highly discouraged to use
+/// [`sync`](crate::sync) module in uncooperative mode.
 pub struct ThreadManager<VM: VirtualMachine> {
     inner: Monitor<RefCell<ThreadManagerInner<VM>>>,
     soft_handshake_left: AtomicUsize,
@@ -1447,7 +1513,8 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
             // Deal with terminating threads to ensure that all threads are either dead to MMTk or stopped above.
             self.process_about_to_terminate();
 
-            let threads = self.inner
+            let threads = self
+                .inner
                 .lock_no_handshake()
                 .borrow()
                 .threads
@@ -1465,7 +1532,7 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
                 }
             }
 
-            threads 
+            threads
         } else {
             self.process_about_to_terminate();
             let mut handshake_threads = Vec::with_capacity(4);
@@ -1844,6 +1911,7 @@ static TARGET_THREAD: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 extern "C-unwind" fn signal_handler_suspend_resume<VM: VirtualMachine>(
     _signal: i32,
     _info: *const libc::siginfo_t,
+    _ucontext: *mut libc::c_void,
 ) {
     let target = TARGET_THREAD.load(Ordering::Relaxed).cast::<Thread<VM>>();
     let thread = unsafe { target.as_ref().unwrap() };
@@ -1878,6 +1946,22 @@ extern "C-unwind" fn signal_handler_suspend_resume<VM: VirtualMachine>(
     thread
         .stack_pointer
         .store(approximate_stack_pointer.as_usize(), Ordering::Release);
+
+    cfgenius::cond! {
+        if macro(crate::macros::have_machine_context) {
+            let user_context = _ucontext.cast::<libc::ucontext_t>();
+            unsafe {
+                thread.platform_registers.get().write(MaybeUninit::new(crate::machine_context::registers_from_ucontext(user_context).read()));
+            }
+        } else {
+            unsafe {
+                thread.platform_registers.get().write(MaybeUninit::new(crate::machine_context::PlatformRegisters {
+                    stack_pointer: approximate_stack_pointer.as_usize() as *mut u8
+                }))
+            }
+        }
+    }
+
     // Allow suspend caller to see that this thread is suspended.
     // sem_post is async-signal-safe function. It means that we can call this from a signal handler.
     // http://pubs.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_04.html#tag_02_04_03

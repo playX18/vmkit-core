@@ -146,6 +146,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
                         object_start.store(HeapObjectHeader::<VM>::new(metadata));
                         let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
                         Self::set_vo_bit(object);
+                        debug_assert!(mmtk::memory_manager::is_mapped_address(object.as_address()));
                         return object;
                     }
 
@@ -272,6 +273,7 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             let object = VMKitObject::from_address(object_start + OBJECT_REF_OFFSET);
             Self::set_vo_bit(object);
             Self::refill_tlab(thread);
+            debug_assert!(mmtk::memory_manager::is_mapped_address(object.as_address()));
             object
         }
     }
