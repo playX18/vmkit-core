@@ -20,4 +20,3 @@ and management of threads is fully internal to the library.
 and also requires runtime to do write barriers and have precise object layout. Stack is left to be conservatively scanned. 
 - `full-precise`: This is precise flavor. Provides everything that `cooperative` provides, and also requires
 runtime to not have any conservative assumptions such as conservative stack scanning.
-
