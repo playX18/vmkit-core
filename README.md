@@ -1,6 +1,10 @@
 # vmkit-core
 
+
+
 vmkit-core is a library which provides building blocks for building a language runtime.
+
+NOTE: Original code is uploaded on [git.playxe.org:playXE/vmkit-core](https://git.playxe.org/playXE/vmkit-core), GitHub repository is a push mirror for backups. 
 
 # Features
 - Garbage Collector: Done by using [mmtk-core](https://github.com/mmtk/mmtk-core)
