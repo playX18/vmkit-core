@@ -129,7 +129,7 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
         object: mmtk::util::ObjectReference,
     ) -> bool {
         if VM::ALWAYS_TRACE {
-            return true;
+            return false;
         }
         let object = VMKitObject::from(object);
         let metadata = object.header::<VM>().metadata();

@@ -598,7 +598,7 @@ impl<VM: VirtualMachine> Thread<VM> {
     /// Checks if the thread system has acknowledged that the thread is supposed
     /// to be blocked. This will return true if the thread is actually blocking, or
     /// if the thread is running native code but is guaranteed to block before
-    /// returning to Java. Only call this method when already holding the monitor(),
+    /// returning to managed code. Only call this method when already holding the monitor(),
     /// for two reasons:
     ///
     /// 1. This method does not acquire the monitor() lock even though it needs
@@ -1179,7 +1179,7 @@ impl<VM: VirtualMachine> Thread<VM> {
                     // (see enter_native_blocked, check_block, and add_about_to_terminate)
                     // either way, we will wait for it to get there before exiting
                     // this call, since the caller expects that after softHandshake()
-                    // returns, no thread will be running Java code without having
+                    // returns, no thread will be running managed code without having
                     // acknowledged.
                     thread
                         .soft_handshake_requested
