@@ -85,6 +85,9 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
 
     /// MMTk calls this method at the first time during a collection that thread's stacks have been scanned. This can be used (for example) to clean up obsolete compiled methods that are no longer being executed.
     fn notify_initial_thread_scan_complete(partial_scan: bool, tls: mmtk::util::VMWorkerThread);
+
+    /// MMTk calls this method when the STW is complete. Use this to kickoff finalizer processing or other VM-specific tasks.
+    fn notify_stw_complete() {}
     /// Process weak references.
     ///
     /// This function is called after a transitive closure is completed.
