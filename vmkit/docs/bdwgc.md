@@ -14,6 +14,9 @@ Once your runtime runs with BDWGC shim (or sometims fails with some unimplemente
 to start working on porting from BDWGC API to VMKit. This can be done by carefully replacing all `GC_malloc` calls
 with calls to `MemoryManager::allocate` and also adding necessary vtables for the types you wish to allocate on VMKit heap.
 
+Note that you don't have to update *all* of your runtime instantly, you can change it one type at a time safely as BDWGC shim
+does not break if you will allocate objects with their own metadata. 
+
 Here's a small example of how this can be done:
 
 ```c
