@@ -10,6 +10,63 @@ in a way that pkg-config or build system of your project can find it.
 - Swap `-lgc` with `-lvmkit` in your build command.
 - Done.
 
+Once your runtime runs with BDWGC shim (or sometims fails with some unimplemented APIs...) it's probably time
+to start working on porting from BDWGC API to VMKit. This can be done by carefully replacing all `GC_malloc` calls
+with calls to `MemoryManager::allocate` and also adding necessary vtables for the types you wish to allocate on VMKit heap.
+
+Here's a small example of how this can be done:
+
+```c
+
+// old, BDWGC code
+
+typedef struct {
+    Scm car;
+    Scm cdr;
+} Pair;
+
+Scm makeCons(Scm car, Scm cdr) {
+    Pair* pair = GC_malloc(sizeof(Pair));
+    pair->car = car;
+    pair->cdr = cdr;
+
+    return (Scm)pair;
+}
+
+// new, VMKit based code (note that C API bindings atm are on user side, vmkit does not provide them yet)
+typedef struct {
+    Scm car;
+    Scm cdr;
+} Pair;
+
+void tracePair(void* object, ObjectTracer tracer) {
+    vmkit_trace((Scm*)object + offsetof(car), tracer);
+    vmkit_trace((Scm*)object + offsetof(cdr), tracer);
+}
+
+GCMetadata pairMetadata = {
+    .trace = TRACE_CALLBACK_TRACE(tracePair),
+    .instance_size = sizeof(Pair),
+    .alignment = sizeof(uintptr_t),
+    .compute_size = NULL,
+    .compute_alignment = NULL
+};
+
+Scm makeCons(Scm car, Scm cdr) {
+    Pair* pair = vmkit_memorymanager_alloc(&pairMetadata, sizeof(Pair), sizeof(uintptr_t), AllocationSemantics_Default);
+
+    pair->car = car;
+    pair->cdr = cdr;
+
+    return pair;
+}
+
+```
+
+
+
+
+
 ## Notes
 
 - VMKit does not support every feature of BDWGC, some shims are no-ops.
