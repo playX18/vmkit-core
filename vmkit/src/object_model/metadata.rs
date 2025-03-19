@@ -47,7 +47,9 @@ pub trait Metadata<VM: VirtualMachine>:
 
 pub trait BuildMetadata<VM: VirtualMachine> {
     fn build_metadata_static() -> VM::Metadata;
-    fn build_metadata(&self) -> VM::Metadata;
+    fn build_metadata(&self) -> VM::Metadata {
+        Self::build_metadata_static()
+    }
 }
 
 /// Maximum object size that can be handled by uncooperative GC (64GiB default).
