@@ -38,6 +38,7 @@ impl<VM: VirtualMachine> Collection<MemoryManager<VM>> for VMKitCollection<VM> {
     fn resume_mutators(_tls: mmtk::util::VMWorkerThread) {
         let vmkit = VM::get().vmkit();
         vmkit.thread_manager().unblock_all_mutators_for_gc();
+        VM::notify_stw_complete();
     }
 
     fn create_gc_trigger() -> Box<dyn mmtk::util::heap::GCTriggerPolicy<MemoryManager<VM>>> {
