@@ -419,6 +419,7 @@ fn derive_gcmetadata(s: synstructure::Structure<'_>) -> proc_macro2::TokenStream
                     quote! {
                         #[inline]
                         fn scan_object(&self, visitor: &mut dyn ::vmkit::prelude::SlotVisitor<#full_path>) {
+                            
                             let this = self;
                             #extra
                             match *self { #trace_body }
@@ -474,9 +475,10 @@ fn derive_gcmetadata(s: synstructure::Structure<'_>) -> proc_macro2::TokenStream
                     quote! {
                         #[inline]
                         fn trace_object(&mut self, visitor: &mut dyn ::vmkit::prelude::ObjectTracer) {
-                            match *self { #trace_body };
                             let this = self;
                             #extra
+                            match *self { #trace_body };
+                            
                         }
                     }
                 )

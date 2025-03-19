@@ -745,6 +745,9 @@ pub struct GcPtr<T> {
     ptr: NonNull<T>,
 }
 
+unsafe impl<T: Send> Send for GcPtr<T> {}
+unsafe impl<T: Sync> Sync for GcPtr<T> {}
+
 impl<T> GcPtr<T> {
     pub fn new(ptr: NonNull<T>) -> Self {
         Self { ptr }
