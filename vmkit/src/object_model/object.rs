@@ -1,10 +1,9 @@
 use crate::mm::traits::SlotExtra;
+use crate::prelude::Trace;
 use crate::threading::Thread;
 use crate::{mm::MemoryManager, VirtualMachine};
 use atomic::Atomic;
 use core::ops::Range;
-use std::mem::MaybeUninit;
-use std::ptr::NonNull;
 use mmtk::util::{
     constants::LOG_BYTES_IN_ADDRESS, conversions::raw_align_up, Address, ObjectReference,
 };
@@ -12,6 +11,8 @@ use mmtk::vm::slot::{MemorySlice, SimpleSlot, Slot};
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 
 use super::{
     compression::CompressedOps,
@@ -23,10 +24,10 @@ use super::{
 
 /// Is address based hash enabled? If true
 /// then object header uses 2 bits to indicate hash state and if GC moves
-/// the object, object hash is stored in the object itself. 
-/// 
+/// the object, object hash is stored in the object itself.
+///
 /// When disabled, `hashcode()` instead calls into VM to get the hashcode.
-pub const ADDRESS_BASED_HASHING: bool = cfg!(feature="address_based_hashing");
+pub const ADDRESS_BASED_HASHING: bool = cfg!(feature = "address_based_hashing");
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -765,6 +766,10 @@ impl<T> GcPtr<T> {
         unsafe { self.ptr.as_mut() }
     }
 
+    pub fn as_object(&self) -> VMKitObject {
+        VMKitObject::from_address(self.as_address())
+    }
+
     pub fn as_address(&self) -> Address {
         Address::from_mut_ptr(self.ptr.as_ptr())
     }
@@ -843,3 +848,15 @@ impl<T> Clone for GcPtr<T> {
 }
 
 impl<T> Copy for GcPtr<T> {}
+
+impl<T> Trace for GcPtr<T> {
+    fn trace_object(&mut self, tracer: &mut dyn mmtk::vm::ObjectTracer) {
+        unsafe {
+            let object = self.as_object().as_object_unchecked();
+            let new = tracer.trace_object(object);
+            if new != object {
+                self.ptr = NonNull::new(new.to_raw_address().to_mut_ptr()).unwrap();
+            }
+        }
+    }
+}
