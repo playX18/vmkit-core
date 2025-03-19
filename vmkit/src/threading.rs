@@ -739,6 +739,7 @@ impl<VM: VirtualMachine> Thread<VM> {
         self.stack_pointer
             .store(current_stack_pointer().as_usize(), Ordering::Relaxed);
         self.context.save_thread_state();
+        self.save_registers();
         self.check_block_no_save_context();
     }
 

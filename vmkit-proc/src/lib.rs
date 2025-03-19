@@ -586,6 +586,12 @@ fn derive_gcmetadata(s: synstructure::Structure<'_>) -> proc_macro2::TokenStream
                 &METADATA
             }
         }
+
+        impl ::vmkit::object_model::metadata::HasMetadata<#vm> for #name {
+            fn get_gc_metadata(&self) -> &'static ::vmkit::prelude::GCMetadata<#vm> {
+                #name::gc_metadata()
+            }
+        }
     };
 
     if let Some(trace_impl) = trace_impl {

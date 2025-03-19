@@ -4,6 +4,7 @@ use crate::{
         object::VMKitObject,
         VMKitObjectModel,
     },
+    prelude::{BuildMetadata, GcPtr},
     threading::Thread,
     VirtualMachine,
 };
@@ -21,7 +22,7 @@ use mmtk::{
     AllocationSemantics, BarrierSelector, MutatorContext,
 };
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, mem::MaybeUninit};
 
 #[derive(Clone, Copy)]
 pub struct MemoryManager<VM: VirtualMachine>(PhantomData<VM>);
@@ -53,10 +54,10 @@ pub mod collection;
 pub mod conservative_roots;
 pub mod ref_glue;
 pub mod scanning;
+pub mod spec;
 pub mod stack_bounds;
 pub mod tlab;
 pub mod traits;
-pub mod spec;
 
 impl<VM: VirtualMachine> MemoryManager<VM> {
     pub extern "C-unwind" fn request_gc() -> bool {
@@ -471,6 +472,48 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
             .gc_disabled_depth
             .load(atomic::Ordering::SeqCst)
             == 0
+    }
+
+    /// Allocate space for `T` on heap with `size` bytes.  
+    ///
+    /// This function automatically constructs metadata based on [`BuildMetadata`]
+    /// trait and then stores the value on heap memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is less thant `size_of::<T>()`
+    pub fn manage<T: BuildMetadata<VM>>(value: T, size: usize) -> GcPtr<T> {
+        assert!(size >= size_of::<T>());
+        let object = Self::allocate(
+            &Thread::<VM>::current(),
+            size,
+            align_of::<T>(),
+            value.build_metadata(),
+            AllocationSemantics::Default,
+        );
+        unsafe {
+            object.as_address().store(value);
+            GcPtr::from_address(object.as_address())
+        }
+    }
+    /// Allocate space for `T` on heap with `size` bytes.  
+    ///
+    /// This function automatically constructs metadata based on [`BuildMetadata`]
+    /// trait.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is less thant `size_of::<T>()`
+    pub fn manage_uninit<T: BuildMetadata<VM>>(size: usize) -> GcPtr<MaybeUninit<T>> {
+        assert!(size >= size_of::<T>());
+        let object = Self::allocate(
+            &Thread::<VM>::current(),
+            size,
+            align_of::<T>(),
+            T::build_metadata_static(),
+            AllocationSemantics::Default,
+        );
+        GcPtr::from_address(object.as_address())
     }
 }
 

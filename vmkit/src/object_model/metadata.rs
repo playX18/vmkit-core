@@ -45,6 +45,11 @@ pub trait Metadata<VM: VirtualMachine>:
     fn from_object_reference(reference: ObjectReference) -> Self;
 }
 
+pub trait BuildMetadata<VM: VirtualMachine> {
+    fn build_metadata_static() -> VM::Metadata;
+    fn build_metadata(&self) -> VM::Metadata;
+}
+
 /// Maximum object size that can be handled by uncooperative GC (64GiB default).
 ///
 /// This is due to the fact that we store the object size in the metadata

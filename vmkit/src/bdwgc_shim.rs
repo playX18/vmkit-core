@@ -156,10 +156,12 @@ impl VirtualMachine for BDWGC {
     type Slot = SimpleSlot;
     type MemorySlice = UnimplementedMemorySlice<Self::Slot>;
 
-    #[cfg(feature="vmside_forwarding")]
-    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec = mmtk::vm::VMLocalForwardingBitsSpec::side_first();
-    #[cfg(feature="vmside_forwarding")]
-    const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec = mmtk::vm::VMLocalForwardingPointerSpec::in_header(0);
+    #[cfg(feature = "vmside_forwarding")]
+    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec =
+        mmtk::vm::VMLocalForwardingBitsSpec::side_first();
+    #[cfg(feature = "vmside_forwarding")]
+    const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec =
+        mmtk::vm::VMLocalForwardingPointerSpec::in_header(0);
 
     fn get() -> &'static Self {
         BDWGC_VM.get().expect("GC is not initialized")
