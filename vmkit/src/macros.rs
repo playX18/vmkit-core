@@ -1,7 +1,7 @@
 cfgenius::define! {
     pub darwin = cfg(target_vendor="apple");
     pub ios_family = all(macro(darwin), cfg(target_os="ios"));
-    pub have_machine_context = any(
+    pub have_machine_context = all(not(cfg(target_env="musl")), any(
         macro(darwin),
         cfg(target_os="fuchsia"),
         all(
@@ -21,7 +21,7 @@ cfgenius::define! {
                     target_arch="riscv64", 
                 )
             )
-        ));
+        )));
 
 }
 

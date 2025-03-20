@@ -1842,7 +1842,12 @@ impl<VM: VirtualMachine> Thread<VM> {
     /// and will not release any held locks, might trigger memory leaks or segfaults. Use at your own risk.
     pub unsafe fn suspend(&self, _locker: &ThreadSuspendLocker<'_>) -> bool {
         if self.suspend_count.load(Ordering::Relaxed) == 0 {
+            #[cfg(not(target_env="musl"))]
             while self.platform_handle.get() == 0 {
+                std::thread::yield_now(); // spin wait for thread to be established
+            }
+            #[cfg(target_env="musl")]
+            while self.platform_handle.get().is_null() {
                 std::thread::yield_now(); // spin wait for thread to be established
             }
             TARGET_THREAD.store(self as *const Self as *mut _, Ordering::Relaxed);
