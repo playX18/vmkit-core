@@ -1295,6 +1295,7 @@ impl<VM: VirtualMachine> Thread<VM> {
 
 thread_local! {
     static CURRENT_THREAD: RefCell<Address> = RefCell::new(Address::ZERO);
+    static REGISTERED: Cell<bool> = Cell::new(false);
 }
 
 pub fn current_thread<VM: VirtualMachine>() -> &'static Thread<VM> {
@@ -1317,6 +1318,7 @@ pub fn try_current_thread<VM: VirtualMachine>() -> Option<&'static Thread<VM>> {
 pub(crate) fn init_current_thread<VM: VirtualMachine>(thread: Arc<Thread<VM>>) {
     let thread = Arc::into_raw(thread);
     CURRENT_THREAD.with(|t| *t.borrow_mut() = Address::from_ptr(thread));
+    REGISTERED.with(|r| r.set(true));
 }
 
 pub(crate) fn deinit_current_thread<VM: VirtualMachine>() {
@@ -1327,8 +1329,15 @@ pub(crate) fn deinit_current_thread<VM: VirtualMachine>() {
             drop(thread);
         }
         *threadptr = Address::ZERO;
-    })
+    });
+
+    REGISTERED.with(|r| r.set(false));
 }
+
+pub fn is_current_thread_registered() -> bool {
+    REGISTERED.with(|r| r.get())
+}
+
 
 /// Thread management system. This type is responsible
 /// for registering and managing all threads in the system. When GC
