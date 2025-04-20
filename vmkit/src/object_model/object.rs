@@ -158,7 +158,8 @@ impl VMKitObject {
     /// * `usize` - The number of bytes used.
     #[inline(always)]
     pub fn bytes_used<VM: VirtualMachine>(self) -> usize {
-        let metadata = self.header::<VM>().metadata().gc_metadata();
+        let metadata = self.header::<VM>().metadata();
+        let metadata = metadata.gc_metadata();
         let overhead = self.hashcode_overhead::<VM, false>();
 
         let res = if metadata.instance_size != 0 {
@@ -187,7 +188,8 @@ impl VMKitObject {
     /// * `usize` - The number of bytes required.
     #[inline(always)]
     pub fn bytes_required_when_copied<VM: VirtualMachine>(self) -> usize {
-        let metadata = self.header::<VM>().metadata().gc_metadata();
+        let metadata = self.header::<VM>().metadata();
+        let metadata = metadata.gc_metadata();
         let overhead = self.hashcode_overhead::<VM, true>();
 
         if metadata.instance_size != 0 {

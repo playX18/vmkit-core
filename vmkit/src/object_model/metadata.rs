@@ -37,7 +37,7 @@ pub trait Metadata<VM: VirtualMachine>:
     /// Size of the metadata in bits. Must be `<= 62`.
     const METADATA_BIT_SIZE: usize;
 
-    fn gc_metadata(&self) -> &'static GCMetadata<VM>;
+    fn gc_metadata(&self) -> &GCMetadata<VM>;
 
     fn is_object(&self) -> bool;
 

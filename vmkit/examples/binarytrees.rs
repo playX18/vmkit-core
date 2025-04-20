@@ -127,8 +127,8 @@ impl NodeRef {
             AllocationSemantics::Default,
         );
         //node.hashcode::<BenchVM>();
-        node.set_field_object::<BenchVM, false>(offset_of!(Node, left), left.0);
-        node.set_field_object::<BenchVM, false>(offset_of!(Node, right), right.0);
+        node.set_field_object::<BenchVM, false>(offset_of!(Node, left) as _, left.0);
+        node.set_field_object::<BenchVM, false>(offset_of!(Node, right) as _, right.0);
 
         Self(node)
     }
