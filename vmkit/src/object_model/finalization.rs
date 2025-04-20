@@ -21,6 +21,22 @@ pub struct Finalizer {
     pub finalizer: FinalizerKind,
 }
 
+impl Finalizer {
+    pub fn run(&mut self) {
+        let finalizer = self.finalizer.take();
+        match finalizer {
+            FinalizerKind::Finalized => {}
+            FinalizerKind::Unordered(callback) => {
+                let object = self.object;
+                callback(object);
+            }
+            FinalizerKind::Drop(callback) => {
+                callback();
+            }
+        }
+    }
+}
+
 pub enum FinalizerKind {
     Finalized,
     /// Unordered finalizer: finalizer revives the object and
@@ -111,9 +127,8 @@ impl<VM: VirtualMachine> MemoryManager<VM> {
     }
 
     pub fn run_finalizers() -> usize {
-        let vm = VM::get();
         let mut count = 0;
-        while let Some(mut finalizer) = mmtk::memory_manager::get_finalized_object(&vm.vmkit().mmtk)
+        while let Some(mut finalizer) = Self::get_finalized_object()
         {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| finalizer.run()));
             count += 1;

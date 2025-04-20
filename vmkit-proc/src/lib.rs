@@ -597,4 +597,4 @@ fn derive_gcmetadata(s: synstructure::Structure<'_>) -> proc_macro2::TokenStream
     output.into()
 }
 
-mod bytecode;
+//mod bytecode;
