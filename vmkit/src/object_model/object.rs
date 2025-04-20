@@ -298,23 +298,23 @@ impl VMKitObject {
 
     pub fn get_field_primitive<T, VM: VirtualMachine, const VOLATILE: bool>(
         &self,
-        offset: usize,
+        offset: isize,
     ) -> T
     where
         T: Copy + bytemuck::NoUninit + bytemuck::Pod,
     {
         unsafe {
             debug_assert!(
-                offset < self.bytes_used::<VM>(),
+                offset < self.bytes_used::<VM>() as isize,
                 "attempt to access field out of bounds"
             );
             let ordering = if !VOLATILE {
-                return self.as_address().add(offset).load::<T>();
+                return self.as_address().offset(offset).load::<T>();
             } else {
                 atomic::Ordering::SeqCst
             };
             self.as_address()
-                .add(offset)
+                .offset(offset)
                 .as_ref::<Atomic<T>>()
                 .load(ordering)
         }
@@ -322,147 +322,147 @@ impl VMKitObject {
 
     pub fn set_field_primitive<T, VM: VirtualMachine, const VOLATILE: bool>(
         &self,
-        offset: usize,
+        offset: isize,
         value: T,
     ) where
         T: Copy + bytemuck::NoUninit,
     {
         debug_assert!(
-            offset < self.bytes_used::<VM>(),
+            offset < self.bytes_used::<VM>() as isize,
             "attempt to access field out of bounds"
         );
         unsafe {
             let ordering = if !VOLATILE {
-                self.as_address().add(offset).store(value);
+                self.as_address().offset(offset).store(value);
                 return;
             } else {
                 atomic::Ordering::SeqCst
             };
             self.as_address()
-                .add(offset)
+                .offset(offset)
                 .as_ref::<Atomic<T>>()
                 .store(value, ordering);
         }
     }
-    pub fn get_field_bool<VM: VirtualMachine>(&self, offset: usize) -> bool {
+    pub fn get_field_bool<VM: VirtualMachine>(&self, offset: isize) -> bool {
         self.get_field_primitive::<u8, VM, false>(offset) != 0
     }
 
-    pub fn set_field_bool<VM: VirtualMachine>(&self, offset: usize, value: bool) {
+    pub fn set_field_bool<VM: VirtualMachine>(&self, offset: isize, value: bool) {
         self.set_field_primitive::<u8, VM, false>(offset, if value { 1 } else { 0 });
     }
 
-    pub fn get_field_u8<VM: VirtualMachine>(&self, offset: usize) -> u8 {
+    pub fn get_field_u8<VM: VirtualMachine>(&self, offset: isize) -> u8 {
         self.get_field_primitive::<u8, VM, false>(offset)
     }
 
-    pub fn set_field_u8<VM: VirtualMachine>(&self, offset: usize, value: u8) {
+    pub fn set_field_u8<VM: VirtualMachine>(&self, offset: isize, value: u8) {
         self.set_field_primitive::<u8, VM, false>(offset, value);
     }
 
-    pub fn get_field_u16<VM: VirtualMachine>(&self, offset: usize) -> u16 {
+    pub fn get_field_u16<VM: VirtualMachine>(&self, offset: isize) -> u16 {
         self.get_field_primitive::<u16, VM, false>(offset)
     }
 
-    pub fn set_field_u16<VM: VirtualMachine>(&self, offset: usize, value: u16) {
+    pub fn set_field_u16<VM: VirtualMachine>(&self, offset: isize, value: u16) {
         self.set_field_primitive::<u16, VM, false>(offset, value);
     }
-
-    pub fn get_field_u32<VM: VirtualMachine>(&self, offset: usize) -> u32 {
+    
+    pub fn get_field_u32<VM: VirtualMachine>(&self, offset: isize) -> u32 {
         self.get_field_primitive::<u32, VM, false>(offset)
     }
 
-    pub fn set_field_u32<VM: VirtualMachine>(&self, offset: usize, value: u32) {
+    pub fn set_field_u32<VM: VirtualMachine>(&self, offset: isize, value: u32) {
         self.set_field_primitive::<u32, VM, false>(offset, value);
     }
 
-    pub fn get_field_u64<VM: VirtualMachine>(&self, offset: usize) -> u64 {
+    pub fn get_field_u64<VM: VirtualMachine>(&self, offset: isize) -> u64 {
         self.get_field_primitive::<u64, VM, false>(offset)
     }
 
-    pub fn set_field_u64<VM: VirtualMachine>(&self, offset: usize, value: u64) {
+    pub fn set_field_u64<VM: VirtualMachine>(&self, offset: isize, value: u64) {
         self.set_field_primitive::<u64, VM, false>(offset, value);
     }
 
-    pub fn get_field_i8<VM: VirtualMachine>(&self, offset: usize) -> i8 {
+    pub fn get_field_i8<VM: VirtualMachine>(&self, offset: isize) -> i8 {
         self.get_field_primitive::<i8, VM, false>(offset)
     }
 
-    pub fn set_field_i8<VM: VirtualMachine>(&self, offset: usize, value: i8) {
+    pub fn set_field_i8<VM: VirtualMachine>(&self, offset: isize, value: i8) {
         self.set_field_primitive::<i8, VM, false>(offset, value);
     }
 
-    pub fn get_field_i16<VM: VirtualMachine>(&self, offset: usize) -> i16 {
+    pub fn get_field_i16<VM: VirtualMachine>(&self, offset: isize) -> i16 {
         self.get_field_primitive::<i16, VM, false>(offset)
     }
 
-    pub fn set_field_i16<VM: VirtualMachine>(&self, offset: usize, value: i16) {
+    pub fn set_field_i16<VM: VirtualMachine>(&self, offset: isize, value: i16) {
         self.set_field_primitive::<i16, VM, false>(offset, value);
     }
 
-    pub fn get_field_i32<VM: VirtualMachine>(&self, offset: usize) -> i32 {
+    pub fn get_field_i32<VM: VirtualMachine>(&self, offset: isize) -> i32 {
         self.get_field_primitive::<i32, VM, false>(offset)
     }
 
-    pub fn set_field_i32<VM: VirtualMachine>(&self, offset: usize, value: i32) {
+    pub fn set_field_i32<VM: VirtualMachine>(&self, offset: isize, value: i32) {
         self.set_field_primitive::<i32, VM, false>(offset, value);
     }
 
-    pub fn get_field_i64<VM: VirtualMachine>(&self, offset: usize) -> i64 {
+    pub fn get_field_i64<VM: VirtualMachine>(&self, offset: isize) -> i64 {
         self.get_field_primitive::<i64, VM, false>(offset)
     }
 
-    pub fn set_field_i64<VM: VirtualMachine>(&self, offset: usize, value: i64) {
+    pub fn set_field_i64<VM: VirtualMachine>(&self, offset: isize, value: i64) {
         self.set_field_primitive::<i64, VM, false>(offset, value);
     }
 
-    pub fn get_field_f32<VM: VirtualMachine>(&self, offset: usize) -> f32 {
+    pub fn get_field_f32<VM: VirtualMachine>(&self, offset: isize) -> f32 {
         self.get_field_primitive::<f32, VM, false>(offset)
     }
 
-    pub fn set_field_f32<VM: VirtualMachine>(&self, offset: usize, value: f32) {
+    pub fn set_field_f32<VM: VirtualMachine>(&self, offset: isize, value: f32) {
         self.set_field_primitive::<f32, VM, false>(offset, value);
     }
 
-    pub fn get_field_f64<VM: VirtualMachine>(&self, offset: usize) -> f64 {
+    pub fn get_field_f64<VM: VirtualMachine>(&self, offset: isize) -> f64 {
         self.get_field_primitive::<f64, VM, false>(offset)
     }
 
-    pub fn set_field_f64<VM: VirtualMachine>(&self, offset: usize, value: f64) {
+    pub fn set_field_f64<VM: VirtualMachine>(&self, offset: isize, value: f64) {
         self.set_field_primitive::<f64, VM, false>(offset, value);
     }
 
-    pub fn get_field_isize<VM: VirtualMachine>(&self, offset: usize) -> isize {
+    pub fn get_field_isize<VM: VirtualMachine>(&self, offset: isize) -> isize {
         self.get_field_primitive::<isize, VM, false>(offset)
     }
 
-    pub fn set_field_isize<VM: VirtualMachine>(&self, offset: usize, value: isize) {
+    pub fn set_field_isize<VM: VirtualMachine>(&self, offset: isize, value: isize) {
         self.set_field_primitive::<isize, VM, false>(offset, value);
     }
 
-    pub fn get_field_usize<VM: VirtualMachine>(&self, offset: usize) -> usize {
+    pub fn get_field_usize<VM: VirtualMachine>(&self, offset: isize) -> usize {
         self.get_field_primitive::<usize, VM, false>(offset)
     }
 
-    pub fn set_field_usize<VM: VirtualMachine>(&self, offset: usize, value: usize) {
+    pub fn set_field_usize<VM: VirtualMachine>(&self, offset: isize, value: usize) {
         self.set_field_primitive::<usize, VM, false>(offset, value);
     }
 
     pub unsafe fn set_field_object_no_write_barrier<VM: VirtualMachine, const VOLATILE: bool>(
         &self,
-        offset: usize,
+        offset: isize,
         value: VMKitObject,
     ) {
         self.set_field_primitive::<usize, VM, VOLATILE>(offset, value.as_address().as_usize());
     }
 
-    pub fn slot_at<VM: VirtualMachine>(&self, offset: usize) -> VM::Slot {
-        VM::Slot::from_address(self.as_address() + offset)
+    pub fn slot_at<VM: VirtualMachine>(&self, offset: isize) -> VM::Slot {
+        VM::Slot::from_address(self.as_address() + offset as usize)
     }
 
     pub fn set_field_object<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
         value: VMKitObject,
     ) {
         let tls = Thread::<VM>::current();
@@ -478,7 +478,7 @@ impl VMKitObject {
     /// parameter to perform write barrier.
     pub fn set_field_object_tagged<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
         value_to_set: usize,
         object: VMKitObject,
     ) {
@@ -492,7 +492,7 @@ impl VMKitObject {
 
     pub fn get_field_object<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
     ) -> VMKitObject {
         unsafe {
             let addr = Address::from_usize(self.get_field_primitive::<usize, VM, VOLATILE>(offset));
@@ -502,14 +502,14 @@ impl VMKitObject {
 
     pub fn get_field_narrow<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
     ) -> VMKitNarrow {
         unsafe { VMKitNarrow::from_raw(self.get_field_primitive::<u32, VM, VOLATILE>(offset)) }
     }
 
     pub fn set_field_narrow<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
         value: VMKitNarrow,
     ) {
         let tls = Thread::<VM>::current();
@@ -530,7 +530,7 @@ impl VMKitObject {
 
     pub unsafe fn set_field_narrow_no_write_barrier<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
         value: VMKitNarrow,
     ) {
         self.set_field_primitive::<u32, VM, VOLATILE>(offset, value.raw());
@@ -538,7 +538,7 @@ impl VMKitObject {
 
     pub fn set_field_narrow_tagged<VM: VirtualMachine, const VOLATILE: bool>(
         self,
-        offset: usize,
+        offset: isize,
         value_to_set: u32,
         object: VMKitNarrow,
     ) {
