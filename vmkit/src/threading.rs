@@ -1,12 +1,8 @@
 use std::{
-    cell::{Cell, OnceCell, RefCell, UnsafeCell},
-    mem::{offset_of, MaybeUninit},
-    panic::AssertUnwindSafe,
-    sync::{
+    cell::{Cell, OnceCell, RefCell, UnsafeCell}, mem::{offset_of, MaybeUninit}, panic::AssertUnwindSafe, sync::{
         atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, LazyLock,
-    },
-    thread::JoinHandle,
+    }, thread::JoinHandle
 };
 
 use atomic::Atomic;
@@ -1423,8 +1419,8 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
     }
 
     pub(crate) fn add_about_to_terminate_current(&self) {
-        let inner = self.inner.lock_no_handshake();
-        let mut inner = inner.borrow_mut();
+        let innerm = self.inner.lock_no_handshake();
+        let mut inner = innerm.borrow_mut();
         let index = Thread::<VM>::current()
             .index_in_manager
             .load(atomic::Ordering::Relaxed);
@@ -1433,6 +1429,7 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
         let thread_rc = inner.threads[index].clone().unwrap();
         inner.about_to_terminate.push(thread_rc);
         deinit_current_thread::<VM>();
+        innerm.notify_all();
     }
 
     pub(crate) fn process_about_to_terminate(&self) {
@@ -1455,6 +1452,20 @@ impl<VM: VirtualMachine> ThreadManager<VM> {
             drop(lock);
 
             break;
+        }
+    }
+
+    /// Wait for all threads in the system to stop. This function must be invoked outside of mutator context.
+    pub fn join_all(&self) {
+        if is_current_thread_registered() {
+            panic!("ThreadManager::join_all() must be called outside of mutator context");
+        }
+   
+        let mut threads = self.inner.lock_no_handshake();
+
+        while threads.borrow().threads.len() > 0 {
+            self.process_about_to_terminate();
+            threads.wait_no_handshake();
         }
     }
 

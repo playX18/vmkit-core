@@ -1,4 +1,3 @@
-
 use std::{
     mem::ManuallyDrop,
     num::NonZeroU64,
@@ -156,6 +155,17 @@ impl<T> Monitor<T> {
             guard: ManuallyDrop::new(guard),
         }
     }
+
+    pub unsafe fn relock_no_handshake(&self, rec_count: usize) -> MonitorGuard<'_, T> {
+        let guard = self.mutex.lock();
+        self.holder.store(get_thread_id().get(), Ordering::Relaxed);
+        self.rec_count.store(rec_count, Ordering::Relaxed);
+
+        MonitorGuard {
+            monitor: self,
+            guard: ManuallyDrop::new(guard),
+        }
+    }
 }
 
 pub struct MonitorGuard<'a, T> {
@@ -221,6 +231,22 @@ impl<'a, T> MonitorGuard<'a, T> {
         });
         unsafe { self.monitor.relock_with_handshake::<VM>(rec_count) }
     }
+
+    pub fn unlocked_no_handshake<F, R>(&mut self, action: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        unsafe {
+            let rec_count = self.unlock_completely();
+            let result = action();
+            let guard = self.monitor.mutex.lock();
+            self.monitor.rec_count.store(rec_count, Ordering::Relaxed);
+            self.monitor.holder.store(get_thread_id().get(), Ordering::Relaxed);
+            self.guard = ManuallyDrop::new(guard);
+            result
+        }
+    }
+
 }
 
 impl<'a, T> Drop for MonitorGuard<'a, T> {
@@ -231,4 +257,3 @@ impl<'a, T> Drop for MonitorGuard<'a, T> {
         }
     }
 }
-
