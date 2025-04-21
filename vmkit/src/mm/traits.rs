@@ -31,6 +31,9 @@ pub trait ToSlot<SL: Slot> {
 
 /// Indicates that a type can be traced by a garbage collector.
 pub trait Trace {
+    /// Indicates whether type needs tracing or no.
+    const NEEDS_TRACE: bool = true;
+
     /// Visit each field in its type. Only collector
     /// is allowed to call this method.
     fn trace_object(&mut self, tracer: &mut dyn ObjectTracer);
