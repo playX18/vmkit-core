@@ -9,6 +9,7 @@ use crate::{mm::traits::ToSlot, VirtualMachine};
 use super::object::VMKitObject;
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct GCMetadata<VM: VirtualMachine> {
     pub trace: TraceCallback<VM>,
     pub instance_size: usize,
@@ -17,7 +18,7 @@ pub struct GCMetadata<VM: VirtualMachine> {
     pub compute_alignment: Option<fn(VMKitObject) -> usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum TraceCallback<VM: VirtualMachine> {
     ScanSlots(fn(VMKitObject, &mut dyn SlotVisitor<VM::Slot>)),
     TraceObject(fn(VMKitObject, &mut dyn ObjectTracer)),
