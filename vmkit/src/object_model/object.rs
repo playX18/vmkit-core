@@ -162,23 +162,12 @@ impl VMKitObject {
         let metadata = metadata.gc_metadata();
         let overhead = self.hashcode_overhead::<VM, false>();
 
-        let res = if metadata.instance_size != 0 {
-            raw_align_up(
-                metadata.instance_size + size_of::<HeapObjectHeader<VM>>(),
-                align_of::<usize>(),
-            ) + overhead
-        } else {
-            let Some(compute_size) = metadata.compute_size else {
-                panic!("compute_size is not set for object at {}", self.0);
-            };
+        let mut size = overhead;
+        size += metadata.instance_size;
+        size += metadata.compute_size.map_or(0, |f| f(self));
+        size += size_of::<HeapObjectHeader<VM>>();
 
-            raw_align_up(
-                compute_size(self) + size_of::<HeapObjectHeader<VM>>(),
-                align_of::<usize>(),
-            ) + overhead
-        };
-
-        res
+        raw_align_up(size, align_of::<usize>())
     }
 
     /// Returns the number of bytes required when the `VMKitObject` is copied.
@@ -192,21 +181,12 @@ impl VMKitObject {
         let metadata = metadata.gc_metadata();
         let overhead = self.hashcode_overhead::<VM, true>();
 
-        if metadata.instance_size != 0 {
-            raw_align_up(
-                metadata.instance_size + size_of::<HeapObjectHeader<VM>>(),
-                align_of::<usize>(),
-            ) + overhead
-        } else {
-            let Some(compute_size) = metadata.compute_size else {
-                panic!("compute_size is not set for object at {}", self.0);
-            };
+        let mut size = overhead;
+        size += metadata.instance_size;
+        size += metadata.compute_size.map_or(0, |f| f(self));
+        size += size_of::<HeapObjectHeader<VM>>();
 
-            raw_align_up(
-                compute_size(self) + size_of::<HeapObjectHeader<VM>>(),
-                align_of::<usize>(),
-            ) + overhead
-        }
+        raw_align_up(size, align_of::<usize>())
     }
 
     /// Returns the overhead for the hashcode of the `VMKitObject`.
@@ -369,7 +349,7 @@ impl VMKitObject {
     pub fn set_field_u16<VM: VirtualMachine>(&self, offset: isize, value: u16) {
         self.set_field_primitive::<u16, VM, false>(offset, value);
     }
-    
+
     pub fn get_field_u32<VM: VirtualMachine>(&self, offset: isize) -> u32 {
         self.get_field_primitive::<u32, VM, false>(offset)
     }
@@ -655,7 +635,6 @@ impl<SL: SlotExtra> fmt::Debug for SimpleMemorySlice<SL> {
     }
 }
 
-
 impl<SL: SlotExtra> Hash for SimpleMemorySlice<SL> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.range.start.as_address().hash(state);
@@ -797,7 +776,6 @@ impl<T> GcPtr<MaybeUninit<T>> {
         GcPtr::new(self.ptr.cast())
     }
 }
-
 
 impl<T> std::ops::Deref for GcPtr<T> {
     type Target = T;
