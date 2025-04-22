@@ -655,6 +655,7 @@ impl<SL: SlotExtra> fmt::Debug for SimpleMemorySlice<SL> {
     }
 }
 
+
 impl<SL: SlotExtra> Hash for SimpleMemorySlice<SL> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.range.start.as_address().hash(state);
@@ -797,6 +798,7 @@ impl<T> GcPtr<MaybeUninit<T>> {
     }
 }
 
+
 impl<T> std::ops::Deref for GcPtr<T> {
     type Target = T;
 
@@ -814,6 +816,12 @@ impl<T> std::ops::DerefMut for GcPtr<T> {
 impl<T: fmt::Debug> fmt::Debug for GcPtr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", **self)
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for GcPtr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", **self)
     }
 }
 
