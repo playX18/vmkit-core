@@ -4,7 +4,7 @@ use std::{
 };
 
 use mm::{aslr::aslr_vm_layout, traits::SlotExtra, MemoryManager};
-use mmtk::{vm::slot::MemorySlice, MMTKBuilder, MMTK};
+use mmtk::{scheduler::GCWorker, util::ObjectReference, vm::slot::MemorySlice, MMTKBuilder, MMTK};
 use object_model::object::VMKitObject;
 use threading::{initialize_threading, Thread, ThreadManager};
 
@@ -120,6 +120,18 @@ pub trait VirtualMachine: Sized + 'static + Send + Sync {
         tls: mmtk::util::VMWorkerThread,
         factory: impl mmtk::vm::RootsWorkFactory<<MemoryManager<Self> as mmtk::vm::VMBinding>::VMSlot>,
     );
+
+    fn vm_trace_object<Q: mmtk::ObjectQueue>(
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut GCWorker<MemoryManager<Self>>
+    ) -> ObjectReference {
+        let _ = queue;
+        let _ = object;
+        let _ = worker;
+        
+        unimplemented!()
+    }
 
     /// A hook for the VM to do work after forwarding objects.
     fn post_forwarding(tls: mmtk::util::VMWorkerThread) {
