@@ -1,8 +1,6 @@
 # vmkit-core
 
-
-
-vmkit-core is a library which provides building blocks for building a language runtime.
+Toolkit for building virtual machines and runtimes easily. Based on original VMKit project (https://vmkit.llvm.org) and is continuing with approval of Gaël Thomas itself. 
 
 NOTE: Original code is uploaded on [git.playxe.org:playXE/vmkit-core](https://git.playxe.org/playXE/vmkit-core), GitHub repository is a push mirror for backups. 
 
