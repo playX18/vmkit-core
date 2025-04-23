@@ -69,6 +69,16 @@ impl<VM: VirtualMachine> Scanning<MemoryManager<VM>> for VMKitScanning<VM> {
     ) {
         let object = VMKitObject::from(object);
         let metadata = object.header::<VM>().metadata();
+        // if objects metadata slot is an object we need to trace it. 
+        if let Some(meta_object) = metadata.is_object().then(|| metadata.to_object_reference()).flatten() {
+            let new_object = object_tracer.trace_object(meta_object);
+            // do not call `set_metadata` unless necessary for a few reasons:
+            // 1. VM might not allow building metadata from object reference
+            // 2. It can be expensive to always call `set_metadata`.
+            if new_object != meta_object {
+                object.header::<VM>().set_metadata(VM::Metadata::from_object_reference(new_object));
+            }
+        }
         let gc_metadata = metadata.gc_metadata();
         let trace = &gc_metadata.trace;
         match trace {
