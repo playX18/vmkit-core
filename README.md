@@ -2,7 +2,7 @@
 
 Toolkit for building virtual machines and runtimes easily. Based on original VMKit project (https://vmkit.llvm.org) and is continuing with approval of Gaël Thomas itself. 
 
-NOTE: Original code is uploaded on [git.playxe.org:playXE/vmkit-core](https://git.playxe.org/playXE/vmkit-core), GitHub repository is a push mirror for backups. 
+NOTE: Original code is uploaded on [git.playxe.org:playXE/vmkit-core](https://git.playxe.org/playX18/vmkit-core), GitHub repository is a push mirror for backups. 
 
 # Features
 - Garbage Collector: Done by using [mmtk-core](https://github.com/mmtk/mmtk-core)
