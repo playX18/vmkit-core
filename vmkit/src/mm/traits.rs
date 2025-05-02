@@ -30,7 +30,7 @@ pub trait ToSlot<SL: Slot> {
 }
 
 /// Indicates that a type can be traced by a garbage collector.
-pub trait Trace {
+pub unsafe trait Trace {
     /// Indicates whether type needs tracing or no.
     const NEEDS_TRACE: bool = true;
 
@@ -45,7 +45,7 @@ pub trait Scan<SL: Slot> {
     fn scan_object(&self, visitor: &mut dyn SlotVisitor<SL>);
 }
 
-impl Trace for VMKitObject {
+unsafe impl Trace for VMKitObject {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         if self.is_null() {
             return;
@@ -58,7 +58,7 @@ impl Trace for VMKitObject {
     }
 }
 
-impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
+unsafe impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         #[cfg(feature = "cooperative")]
         {
@@ -199,7 +199,7 @@ macro_rules! impl_prim {
                 }
             }
 
-            impl Trace for $t {
+            unsafe impl Trace for $t {
                 fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
                     let _ = tracer;
                 }
@@ -230,7 +230,7 @@ impl<T: SupportsEnqueuing, U: SupportsEnqueuing> SupportsEnqueuing for Result<T,
     const VALUE: bool = T::VALUE && U::VALUE;
 }
 
-impl<T: Trace> Trace for Option<T> {
+unsafe impl<T: Trace> Trace for Option<T> {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         if let Some(value) = self {
             value.trace(tracer);
@@ -238,7 +238,7 @@ impl<T: Trace> Trace for Option<T> {
     }
 }
 
-impl<T: Trace> Trace for Vec<T> {
+unsafe impl<T: Trace> Trace for Vec<T> {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
             value.trace(tracer);
@@ -246,7 +246,7 @@ impl<T: Trace> Trace for Vec<T> {
     }
 }
 
-impl<T: Trace, const N: usize> Trace for [T; N] {
+unsafe impl<T: Trace, const N: usize> Trace for [T; N] {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
             value.trace(tracer);
@@ -254,7 +254,15 @@ impl<T: Trace, const N: usize> Trace for [T; N] {
     }
 }
 
-impl<T: Trace> Trace for Box<T> {
+unsafe impl<T: Trace> Trace for [T] {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
+        for value in self {
+            value.trace(tracer);
+        }
+    }
+}
+
+unsafe impl<T: Trace> Trace for Box<T> {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         (**self).trace(tracer);
     }
@@ -292,13 +300,13 @@ impl<T, VM: VirtualMachine, SL: Slot + SlotExtra> ToSlot<SL> for FatInternalPoin
     }
 }
 
-impl<T, VM: VirtualMachine> Trace for FatInternalPointer<T, VM> {
+unsafe impl<T, VM: VirtualMachine> Trace for FatInternalPointer<T, VM> {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         self.object().trace(tracer);
     }
 }
 
-impl Trace for VMKitNarrow {
+unsafe impl Trace for VMKitNarrow {
     fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         let mut object = self.to_object();
         object.trace(tracer);
