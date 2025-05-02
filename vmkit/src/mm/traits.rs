@@ -36,7 +36,7 @@ pub trait Trace {
 
     /// Visit each field in its type. Only collector
     /// is allowed to call this method.
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer);
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer);
 }
 
 /// Indicates that type fields can be enqueued as slots by a garbage collector.
@@ -46,7 +46,7 @@ pub trait Scan<SL: Slot> {
 }
 
 impl Trace for VMKitObject {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         if self.is_null() {
             return;
         }
@@ -59,7 +59,7 @@ impl Trace for VMKitObject {
 }
 
 impl<T: Trace, VM: VirtualMachine> Trace for InternalPointer<T, VM> {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         #[cfg(feature = "cooperative")]
         {
             assert!(
@@ -200,7 +200,7 @@ macro_rules! impl_prim {
             }
 
             impl Trace for $t {
-                fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+                fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
                     let _ = tracer;
                 }
             }
@@ -231,32 +231,32 @@ impl<T: SupportsEnqueuing, U: SupportsEnqueuing> SupportsEnqueuing for Result<T,
 }
 
 impl<T: Trace> Trace for Option<T> {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         if let Some(value) = self {
-            value.trace_object(tracer);
+            value.trace(tracer);
         }
     }
 }
 
 impl<T: Trace> Trace for Vec<T> {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
-            value.trace_object(tracer);
+            value.trace(tracer);
         }
     }
 }
 
 impl<T: Trace, const N: usize> Trace for [T; N] {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         for value in self {
-            value.trace_object(tracer);
+            value.trace(tracer);
         }
     }
 }
 
 impl<T: Trace> Trace for Box<T> {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
-        (**self).trace_object(tracer);
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
+        (**self).trace(tracer);
     }
 }
 
@@ -293,15 +293,15 @@ impl<T, VM: VirtualMachine, SL: Slot + SlotExtra> ToSlot<SL> for FatInternalPoin
 }
 
 impl<T, VM: VirtualMachine> Trace for FatInternalPointer<T, VM> {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
-        self.object().trace_object(tracer);
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
+        self.object().trace(tracer);
     }
 }
 
 impl Trace for VMKitNarrow {
-    fn trace_object(&mut self, tracer: &mut dyn ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn ObjectTracer) {
         let mut object = self.to_object();
-        object.trace_object(tracer);
+        object.trace(tracer);
         *self = VMKitNarrow::encode(object);
     }
 }

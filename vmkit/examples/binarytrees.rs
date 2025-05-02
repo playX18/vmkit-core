@@ -26,8 +26,8 @@ struct Node {
 static METADATA: GCMetadata<BenchVM> = GCMetadata {
     trace: TraceCallback::TraceObject(|object, tracer| unsafe {
         let node = object.as_address().as_mut_ref::<Node>();
-        node.left.0.trace_object(tracer);
-        node.right.0.trace_object(tracer);
+        node.left.0.trace(tracer);
+        node.right.0.trace(tracer);
     }),
     instance_size: size_of::<Node>(),
     compute_size: None,

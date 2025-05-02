@@ -838,7 +838,7 @@ impl<T> Clone for GcPtr<T> {
 impl<T> Copy for GcPtr<T> {}
 
 impl<T> Trace for GcPtr<T> {
-    fn trace_object(&mut self, tracer: &mut dyn mmtk::vm::ObjectTracer) {
+    fn trace(&mut self, tracer: &mut dyn mmtk::vm::ObjectTracer) {
         unsafe {
             let object = self.as_object().as_object_unchecked();
             let new = tracer.trace_object(object);
