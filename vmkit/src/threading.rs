@@ -283,10 +283,12 @@ impl<VM: VirtualMachine> Thread<VM> {
 
     pub unsafe fn register_mutator_manual() -> Arc<Self> {
         let this = Self::for_mutator(VM::ThreadContext::new(false));
+      
         unsafe {
             this.tid.store(libc::gettid() as _, Ordering::Relaxed);
         }
         init_current_thread(this.clone());
+
         let constraints = VM::get().vmkit().mmtk.get_plan().constraints();
         this.max_non_los_default_alloc_bytes
             .set(constraints.max_non_los_default_alloc_bytes);
@@ -319,6 +321,7 @@ impl<VM: VirtualMachine> Thread<VM> {
             unsafe { this.mmtk_mutator.get().write(MaybeUninit::new(*mutator)) };
             this.enable_yieldpoints();
         }
+        
         vmkit.thread_manager.add_thread(this.clone());
         unsafe {
             let handle;
@@ -333,6 +336,7 @@ impl<VM: VirtualMachine> Thread<VM> {
 
             this.platform_handle.set(handle);
         }
+        
         this
     }
     pub unsafe fn unregister_mutator_manual() {
@@ -1777,6 +1781,11 @@ block_adapter_list!((X0, X1)(X0, X1, X2)(X0, X1, X2, X3)(X0, X1, X2, X3, X4)(
 /// Parked scope puts current thread to `InNative` state and then puts it back to `InManaged` state after the function returns.
 /// Code inside `f` must not access any managed objects nor allocate any objects.
 pub fn parked_scope<R, VM: VirtualMachine>(f: impl FnOnce() -> R) -> R {
+    let thread = Thread::<VM>::current();
+    let in_native = matches!(thread.get_exec_status(), ThreadState::InNative | ThreadState::New);
+    if in_native {
+        return f();
+    }
     Thread::<VM>::enter_native();
     let result = f();
     Thread::<VM>::leave_native();
